@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"nistro-ctl/internal/api"
+	postgresproduct "nistro-ctl/internal/products/postgres"
+	vllmproduct "nistro-ctl/internal/products/vllm"
 )
 
 var rootCfg struct {
@@ -17,7 +19,7 @@ var rootCfg struct {
 
 var rootCmd = &cobra.Command{
 	Use:           "nistro",
-	Short:         "Manage Nistro vLLM services",
+	Short:         "Manage Nistro services",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
@@ -31,8 +33,9 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&rootCfg.server, "server", env("NISTRO_SERVER", "http://127.0.0.1:8080"), "Nistro server URL")
-	rootCmd.PersistentFlags().StringVar(&rootCfg.token, "token", env("NISTRO_TOKEN", ""), "Omnistrate Provider login JWT")
-	rootCmd.AddCommand(vllmCmd, usageCmd, billingCmd)
+	rootCmd.PersistentFlags().StringVar(&rootCfg.token, "token", env("NISTRO_TOKEN", ""), "Omnistrate customer JWT")
+	registerProducts(vllmproduct.New(), postgresproduct.New())
+	rootCmd.AddCommand(authCmd, usageCmd, billingCmd, cloudAccountsCmd)
 }
 
 func client() *api.Client {

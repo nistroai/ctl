@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,22 +19,47 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type SignInRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type SignInResponse struct {
+	Token string         `json:"token"`
+	Auth  map[string]any `json:"auth,omitempty"`
+}
+
 type DeployRequest struct {
-	Model            string `json:"model"`
-	Quantization     string `json:"quantization,omitempty"`
-	ContextLength    int    `json:"context_length,omitempty"`
-	Location         string `json:"location,omitempty"`
-	Cloud            string `json:"cloud,omitempty"`
-	Region           string `json:"region,omitempty"`
-	InstanceType     string `json:"instance_type,omitempty"`
-	GPUArchitecture  string `json:"gpu_architecture,omitempty"`
-	GPUType          string `json:"gpu_type,omitempty"`
-	Dedicated        bool   `json:"dedicated,omitempty"`
-	AcceptCheapest   bool   `json:"accept_cheapest,omitempty"`
-	VLLMAPIKey       string `json:"vllm_api_key,omitempty"`
-	CustomerID       string `json:"customer_id,omitempty"`
-	StripeCustomerID string `json:"stripe_customer_id,omitempty"`
-	SubscriptionID   string `json:"subscription_id,omitempty"`
+	Model           string `json:"model"`
+	URL             string `json:"url,omitempty"`
+	Quantization    string `json:"quantization,omitempty"`
+	ContextLength   int    `json:"context_length,omitempty"`
+	Location        string `json:"location,omitempty"`
+	Cloud           string `json:"cloud,omitempty"`
+	Region          string `json:"region,omitempty"`
+	InstanceType    string `json:"instance_type,omitempty"`
+	GPUArchitecture string `json:"gpu_architecture,omitempty"`
+	GPUType         string `json:"gpu_type,omitempty"`
+	Dedicated       bool   `json:"dedicated,omitempty"`
+	PricingMode     string `json:"pricing_mode,omitempty"`
+	AcceptCheapest  bool   `json:"accept_cheapest,omitempty"`
+	AccountConfigID string `json:"cloud_provider_account_config_id,omitempty"`
+}
+
+type PostgresDeployRequest struct {
+	VCPU             float64 `json:"vcpu"`
+	MemoryGiB        float64 `json:"memory_gib"`
+	StorageGiB       float64 `json:"storage_gib"`
+	Location         string  `json:"location,omitempty"`
+	Cloud            string  `json:"cloud,omitempty"`
+	Region           string  `json:"region,omitempty"`
+	InstanceType     string  `json:"instance_type,omitempty"`
+	AcceptCheapest   bool    `json:"accept_cheapest,omitempty"`
+	DatabaseName     string  `json:"database_name,omitempty"`
+	DatabaseUsername string  `json:"database_username,omitempty"`
+	DatabasePassword string  `json:"database_password,omitempty"`
+	PricingMode      string  `json:"pricing_mode,omitempty"`
+	AccountConfigID  string  `json:"cloud_provider_account_config_id,omitempty"`
 }
 
 type Deployment struct {
@@ -54,6 +80,30 @@ type Deployment struct {
 	OmnistrateInstanceID string          `json:"omnistrate_instance_id"`
 	EndpointURL          string          `json:"endpoint_url"`
 	ObservabilityURL     string          `json:"observability_url"`
+	VLLMAPIKey           string          `json:"vllm_api_key"`
+	SelectedOffer        json.RawMessage `json:"selected_offer"`
+}
+
+type PostgresDeployment struct {
+	ID                   string          `json:"id"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	CustomerID           string          `json:"customer_id"`
+	Location             string          `json:"location"`
+	Cloud                string          `json:"cloud"`
+	Region               string          `json:"region"`
+	InstanceType         string          `json:"instance_type"`
+	VCPU                 float64         `json:"vcpu"`
+	MemoryGiB            float64         `json:"memory_gib"`
+	StorageGiB           float64         `json:"storage_gib"`
+	DatabaseName         string          `json:"database_name"`
+	DatabaseUsername     string          `json:"database_username"`
+	Status               string          `json:"status"`
+	StatusMessage        string          `json:"status_message"`
+	OmnistrateInstanceID string          `json:"omnistrate_instance_id"`
+	WriterEndpointURL    string          `json:"writer_endpoint_url"`
+	ReaderEndpointURL    string          `json:"reader_endpoint_url"`
+	ObservabilityURL     string          `json:"observability_url"`
 	SelectedOffer        json.RawMessage `json:"selected_offer"`
 }
 
@@ -65,6 +115,15 @@ type LaunchEvent struct {
 	ObservedAt   time.Time       `json:"observed_at"`
 	Phase        string          `json:"phase"`
 	Level        string          `json:"level"`
+	Message      string          `json:"message"`
+	Payload      json.RawMessage `json:"payload,omitempty"`
+}
+
+type PostgresDeploymentEvent struct {
+	ID           int64           `json:"id"`
+	DeploymentID string          `json:"deployment_id"`
+	CreatedAt    time.Time       `json:"created_at"`
+	Status       string          `json:"status"`
 	Message      string          `json:"message"`
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
@@ -85,15 +144,60 @@ type Offer struct {
 	MIGMemoryGB     float64 `json:"mig_memory_gb"`
 }
 
+type PostgresOffer struct {
+	Cloud                     string  `json:"cloud"`
+	Region                    string  `json:"region"`
+	InstanceType              string  `json:"instance_type"`
+	VCPU                      float64 `json:"vcpu"`
+	RAMGiB                    float64 `json:"ram_gib"`
+	StorageGiB                float64 `json:"storage_gib"`
+	StorageType               string  `json:"storage_type"`
+	ComputePricePerHourUSD    float64 `json:"compute_price_per_hour_usd"`
+	StoragePricePerMonthUSD   float64 `json:"storage_price_per_month_usd"`
+	EstimatedPricePerHourUSD  float64 `json:"estimated_price_per_hour_usd"`
+	EstimatedPricePerMonthUSD float64 `json:"estimated_price_per_month_usd"`
+	FractionalVCPUSatisfied   bool    `json:"fractional_vcpu_satisfied"`
+	RequestedVCPU             float64 `json:"requested_vcpu"`
+	RequestedMemoryGiB        float64 `json:"requested_memory_gib"`
+	RequestedStorageGiB       float64 `json:"requested_storage_gib"`
+}
+
 type RecommendationResponse struct {
 	DeploymentOptions []Offer  `json:"deployment_options"`
 	Warnings          []string `json:"warnings"`
+}
+
+type PostgresRecommendationResponse struct {
+	DeploymentOptions []PostgresOffer `json:"deployment_options"`
+	Warnings          []string        `json:"warnings"`
 }
 
 type CreateResponse struct {
 	Deployment     Deployment             `json:"deployment"`
 	SelectedOffer  Offer                  `json:"selected_offer"`
 	Recommendation RecommendationResponse `json:"recommendation"`
+}
+
+type PostgresCreateResponse struct {
+	Deployment     PostgresDeployment             `json:"deployment"`
+	SelectedOffer  PostgresOffer                  `json:"selected_offer"`
+	Recommendation PostgresRecommendationResponse `json:"recommendation"`
+	Omnistrate     map[string]any                 `json:"omnistrate,omitempty"`
+}
+
+type CloudAccountRequest struct {
+	CloudProvider       string `json:"cloud_provider"`
+	CloudProviderID     string `json:"cloud_provider_id,omitempty"`
+	Name                string `json:"name,omitempty"`
+	Description         string `json:"description,omitempty"`
+	AWSAccountID        string `json:"aws_account_id,omitempty"`
+	AWSBootstrapRoleARN string `json:"aws_bootstrap_role_arn,omitempty"`
+	GCPProjectID        string `json:"gcp_project_id,omitempty"`
+	GCPProjectNumber    string `json:"gcp_project_number,omitempty"`
+	GCPServiceAccount   string `json:"gcp_service_account_email,omitempty"`
+	AzureSubscriptionID string `json:"azure_subscription_id,omitempty"`
+	AzureTenantID       string `json:"azure_tenant_id,omitempty"`
+	NebiusTenantID      string `json:"nebius_tenant_id,omitempty"`
 }
 
 type UsageSummary struct {
@@ -130,15 +234,79 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, httpClient: &http.Client{Timeout: 30 * time.Second}}
 }
 
+func (c *Client) SignIn(ctx context.Context, req SignInRequest) (SignInResponse, error) {
+	var out SignInResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/auth/signin", req, &out)
+	return out, err
+}
+
 func (c *Client) Recommend(ctx context.Context, req DeployRequest) (RecommendationResponse, error) {
 	var out RecommendationResponse
 	err := c.doJSON(ctx, http.MethodPost, "/v1/recommendations", req, &out)
 	return out, err
 }
 
+func (c *Client) Quantizations(ctx context.Context, req DeployRequest) (map[string]any, error) {
+	path := "/v1/vllm/quantizations"
+	if query := deployQuery(req); len(query) > 0 {
+		path += "?" + query.Encode()
+	}
+	var out map[string]any
+	err := c.doJSON(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
 func (c *Client) Create(ctx context.Context, req DeployRequest) (CreateResponse, error) {
 	var out CreateResponse
 	err := c.doJSON(ctx, http.MethodPost, "/v1/vllm/deployments", req, &out)
+	return out, err
+}
+
+func (c *Client) Deployments(ctx context.Context) ([]Deployment, error) {
+	var out struct {
+		Deployments []Deployment `json:"deployments"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/v1/vllm/deployments", nil, &out)
+	return out.Deployments, err
+}
+
+func (c *Client) PostgresOffers(ctx context.Context, req PostgresDeployRequest) (PostgresRecommendationResponse, error) {
+	var out PostgresRecommendationResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/postgres/offers", req, &out)
+	return out, err
+}
+
+func (c *Client) CreatePostgres(ctx context.Context, req PostgresDeployRequest) (PostgresCreateResponse, error) {
+	var out PostgresCreateResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/postgres/deployments", req, &out)
+	return out, err
+}
+
+func (c *Client) PostgresDeployments(ctx context.Context) ([]PostgresDeployment, error) {
+	var out struct {
+		Deployments []PostgresDeployment `json:"deployments"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/v1/postgres/deployments", nil, &out)
+	return out.Deployments, err
+}
+
+func (c *Client) PostgresDeployment(ctx context.Context, id string) (PostgresDeployment, error) {
+	var out PostgresDeployment
+	err := c.doJSON(ctx, http.MethodGet, "/v1/postgres/deployments/"+url.PathEscape(id), nil, &out)
+	return out, err
+}
+
+func (c *Client) PostgresEvents(ctx context.Context, id string) ([]PostgresDeploymentEvent, error) {
+	var out struct {
+		Events []PostgresDeploymentEvent `json:"events"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/v1/postgres/deployments/"+url.PathEscape(id)+"/events", nil, &out)
+	return out.Events, err
+}
+
+func (c *Client) DeletePostgres(ctx context.Context, id string) (PostgresDeployment, error) {
+	var out PostgresDeployment
+	err := c.doJSON(ctx, http.MethodDelete, "/v1/postgres/deployments/"+url.PathEscape(id), nil, &out)
 	return out, err
 }
 
@@ -162,14 +330,11 @@ func (c *Client) Delete(ctx context.Context, id string) (Deployment, error) {
 	return out, err
 }
 
-func (c *Client) Usage(ctx context.Context, period, customerID string) ([]UsageSummary, error) {
+func (c *Client) Usage(ctx context.Context, period string) ([]UsageSummary, error) {
 	path := "/v1/usage"
 	query := url.Values{}
 	if period != "" {
 		query.Set("period", period)
-	}
-	if customerID != "" {
-		query.Set("customer_id", customerID)
 	}
 	if len(query) > 0 {
 		path += "?" + query.Encode()
@@ -181,13 +346,40 @@ func (c *Client) Usage(ctx context.Context, period, customerID string) ([]UsageS
 	return out.Usage, err
 }
 
-func (c *Client) BillingStatus(ctx context.Context, customerID string) (map[string]string, error) {
+func (c *Client) BillingStatus(ctx context.Context) (map[string]any, error) {
 	path := "/v1/billing/status"
-	if customerID != "" {
-		path += "?customer_id=" + url.QueryEscape(customerID)
-	}
-	var out map[string]string
+	var out map[string]any
 	err := c.doJSON(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) BillingDetails(ctx context.Context, returnURL string) (map[string]any, error) {
+	path := "/v1/billing/details"
+	if strings.TrimSpace(returnURL) != "" {
+		query := url.Values{}
+		query.Set("return_url", strings.TrimSpace(returnURL))
+		path += "?" + query.Encode()
+	}
+	var out map[string]any
+	err := c.doJSON(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) CloudAccounts(ctx context.Context, cloud string) (map[string]any, error) {
+	path := "/v1/cloud-accounts"
+	if strings.TrimSpace(cloud) != "" {
+		query := url.Values{}
+		query.Set("cloud", strings.TrimSpace(cloud))
+		path += "?" + query.Encode()
+	}
+	var out map[string]any
+	err := c.doJSON(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) CreateCloudAccount(ctx context.Context, req CloudAccountRequest) (map[string]any, error) {
+	var out map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/v1/cloud-accounts", req, &out)
 	return out, err
 }
 
@@ -248,4 +440,31 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, d
 		}
 	}
 	return nil
+}
+
+func deployQuery(req DeployRequest) url.Values {
+	query := url.Values{}
+	setQueryString(query, "model", req.Model)
+	setQueryString(query, "url", req.URL)
+	setQueryString(query, "quantization", req.Quantization)
+	if req.ContextLength > 0 {
+		query.Set("context_length", strconv.Itoa(req.ContextLength))
+	}
+	setQueryString(query, "location", req.Location)
+	setQueryString(query, "cloud", req.Cloud)
+	setQueryString(query, "region", req.Region)
+	setQueryString(query, "instance_type", req.InstanceType)
+	setQueryString(query, "gpu_architecture", req.GPUArchitecture)
+	setQueryString(query, "gpu_type", req.GPUType)
+	setQueryString(query, "pricing_mode", req.PricingMode)
+	if req.Dedicated {
+		query.Set("dedicated", "true")
+	}
+	return query
+}
+
+func setQueryString(query url.Values, key, value string) {
+	if strings.TrimSpace(value) != "" {
+		query.Set(key, strings.TrimSpace(value))
+	}
 }

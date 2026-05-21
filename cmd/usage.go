@@ -12,8 +12,6 @@ var usageCmd = &cobra.Command{
 	Short: "Show usage and pricing",
 }
 
-var usageCustomerID string
-
 var usageCurrentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show current month usage",
@@ -33,14 +31,13 @@ var usageMonthCmd = &cobra.Command{
 }
 
 func init() {
-	usageCmd.PersistentFlags().StringVar(&usageCustomerID, "customer-id", "", "Customer ID")
 	usageCmd.AddCommand(usageCurrentCmd, usageMonthCmd)
 }
 
 func showUsage(cmd *cobra.Command, period string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 	defer cancel()
-	rows, err := client().Usage(ctx, period, firstNonEmpty(usageCustomerID, env("NISTRO_CUSTOMER_ID", "")))
+	rows, err := client().Usage(ctx, period)
 	if err != nil {
 		return err
 	}

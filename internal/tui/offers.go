@@ -16,6 +16,7 @@ type OfferSelector struct {
 	offers   []api.Offer
 	selected *api.Offer
 	err      error
+	title    string
 }
 
 func NewOfferSelector(offers []api.Offer) *OfferSelector {
@@ -52,7 +53,49 @@ func NewOfferSelector(offers []api.Offer) *OfferSelector {
 	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("205"))
 	styles.Selected = styles.Selected.Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(false)
 	t.SetStyles(styles)
-	return &OfferSelector{table: t, offers: offers}
+	return &OfferSelector{table: t, offers: offers, title: "Select hardware for this vLLM deployment"}
+}
+
+func NewPostgresOfferSelector(offers []api.PostgresOffer) *OfferSelector {
+	columns := []table.Column{
+		{Title: "Cloud", Width: 10},
+		{Title: "Region", Width: 16},
+		{Title: "Instance", Width: 22},
+		{Title: "CPU", Width: 8},
+		{Title: "Memory", Width: 9},
+		{Title: "Storage", Width: 16},
+		{Title: "Est", Width: 16},
+	}
+	rows := make([]table.Row, 0, len(offers))
+	generic := make([]api.Offer, 0, len(offers))
+	for _, offer := range offers {
+		rows = append(rows, table.Row{
+			offer.Cloud,
+			offer.Region,
+			offer.InstanceType,
+			fmt.Sprintf("%.3g", offer.VCPU),
+			fmt.Sprintf("%.3g Gi", offer.RAMGiB),
+			fmt.Sprintf("%.3g Gi %s", offer.StorageGiB, offer.StorageType),
+			fmt.Sprintf("$%.4f/hr $%.2f/mo", offer.EstimatedPricePerHourUSD, offer.EstimatedPricePerMonthUSD),
+		})
+		generic = append(generic, api.Offer{
+			Cloud:           offer.Cloud,
+			Region:          offer.Region,
+			SKU:             offer.InstanceType,
+			PricePerHourUSD: offer.EstimatedPricePerHourUSD,
+		})
+	}
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+		table.WithHeight(10),
+	)
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("205"))
+	styles.Selected = styles.Selected.Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(false)
+	t.SetStyles(styles)
+	return &OfferSelector{table: t, offers: generic, title: "Select hardware for this Postgres deployment"}
 }
 
 func (m *OfferSelector) Init() tea.Cmd { return nil }
@@ -79,7 +122,8 @@ func (m *OfferSelector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *OfferSelector) View() string {
 	var b strings.Builder
-	b.WriteString("Select hardware for this vLLM deployment\n\n")
+	b.WriteString(m.title)
+	b.WriteString("\n\n")
 	b.WriteString(m.table.View())
 	b.WriteString("\n\nenter accept  q cancel\n")
 	return b.String()

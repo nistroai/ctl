@@ -12,7 +12,9 @@ var billingCmd = &cobra.Command{
 	Short: "Manage billing",
 }
 
-var billingCustomerID string
+var billingDetailsCfg struct {
+	returnURL string
+}
 
 var billingStatusCmd = &cobra.Command{
 	Use:   "status",
@@ -20,11 +22,26 @@ var billingStatusCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 		defer cancel()
-		status, err := client().BillingStatus(ctx, firstNonEmpty(billingCustomerID, env("NISTRO_CUSTOMER_ID", "")))
+		status, err := client().BillingStatus(ctx)
 		if err != nil {
 			return err
 		}
 		printJSON(status)
+		return nil
+	},
+}
+
+var billingDetailsCmd = &cobra.Command{
+	Use:   "details",
+	Short: "Show payment method and billing portal details",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		defer cancel()
+		details, err := client().BillingDetails(ctx, billingDetailsCfg.returnURL)
+		if err != nil {
+			return err
+		}
+		printJSON(details)
 		return nil
 	},
 }
@@ -38,6 +55,6 @@ var billingPublishStatusCmd = &cobra.Command{
 }
 
 func init() {
-	billingCmd.PersistentFlags().StringVar(&billingCustomerID, "customer-id", "", "Customer ID")
-	billingCmd.AddCommand(billingStatusCmd, billingPublishStatusCmd)
+	billingDetailsCmd.Flags().StringVar(&billingDetailsCfg.returnURL, "return-url", "", "Return URL for payment portal links")
+	billingCmd.AddCommand(billingStatusCmd, billingDetailsCmd, billingPublishStatusCmd)
 }
