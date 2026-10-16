@@ -234,6 +234,16 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, httpClient: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// Resource preserves the full response for deployment tables and details.
+func (c *Client) Resource(ctx context.Context, method, path string, payload any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.doJSON(ctx, method, path, payload, &out)
+	if len(out) == 0 && err == nil {
+		out = json.RawMessage(`{"ok":true}`)
+	}
+	return out, err
+}
+
 func (c *Client) SignIn(ctx context.Context, req SignInRequest) (SignInResponse, error) {
 	var out SignInResponse
 	err := c.doJSON(ctx, http.MethodPost, "/v1/auth/signin", req, &out)
