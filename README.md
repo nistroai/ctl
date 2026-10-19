@@ -12,6 +12,29 @@ make build
 The binary is written to `dist/nistro-<os>-<arch>` (`.exe` on Windows).
 Override the target platform with, for example, `make build GOOS=linux GOARCH=amd64`.
 
+Install the latest published release on macOS, Linux, or Windows (Git Bash):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh
+```
+
+The installer verifies the release checksum and places `nistro` in
+`~/.nistro/bin`. Install a specific release with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -s -- --version v0.1.0
+```
+
+Merges to `main` automatically create the next semantic-version tag and publish
+archives for Linux, macOS, and Windows on AMD64 and ARM64. The default version
+bump is a patch; include `#minor` or `#major` in the merge commit message for a
+larger bump. A manually pushed `v*` tag also publishes a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 Create and update require inputs through flags or `--config-file`; there are no
 configuration prompts, confirmation prompts, or automatic event watchers.
 Optional settings use the defaults shown in command help. JSON files use

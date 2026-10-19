@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"nistro-ctl/internal/api"
+	"nistro-ctl/internal/buildinfo"
 	postgresproduct "nistro-ctl/internal/products/postgres"
 	vllmproduct "nistro-ctl/internal/products/vllm"
 )
@@ -20,6 +21,7 @@ var rootCfg struct {
 var rootCmd = &cobra.Command{
 	Use:               "nistro",
 	Short:             "Manage Nistro services",
+	Version:           buildinfo.String(),
 	SilenceUsage:      true,
 	SilenceErrors:     true,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -47,6 +49,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("nistro {{.Version}}\n")
 	rootCmd.PersistentFlags().StringVar(&rootCfg.server, "server", env("NISTRO_SERVER", "https://api.nistro.ai"), "Nistro server URL")
 	rootCfg.token = env("NISTRO_TOKEN", "")
 	registerProducts(vllmproduct.New(), postgresproduct.New())
