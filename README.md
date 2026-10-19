@@ -86,10 +86,10 @@ Discovery commands accept only the fields used by the website:
 
 Inference and Postgres offers also accept `--config-file`.
 Inference offer tables show GPU, required VRAM, actual GPU VRAM, tensor parallel
-size, estimated hourly price, and GPU memory utilization. Scale also shows cloud,
-region, and instance type. Postgres offer tables omit source; Scale also omits
-requested CPU and memory. Postgres offers and create/update responses omit
-`estimated_price_per_month_usd` in both table and JSON output.
+size, and GPU memory utilization. Scale also shows cloud, region, and instance
+type. All offer tables omit price information. Postgres offer tables also omit
+source; Scale also omits requested CPU and memory. Postgres offers and
+create/update responses omit `estimated_price_per_month_usd` in JSON output.
 
 JSON output preserves other API fields and contains no progress messages.
 Placements uses `/v1/postgres/scale/catalog`. Inference placement choices come

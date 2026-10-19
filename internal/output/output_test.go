@@ -19,8 +19,8 @@ func TestOutput(t *testing.T) {
 		{`{"min_replicas":1,"max_replicas":1}`, "table", "REPLICAS", "min_replicas"},
 		{`{"min_replicas":0,"max_replicas":1}`, "table", "0–1", "max_replicas"},
 		{`{"can_write":true,"min_replicas":1,"max_replicas":1}`, "json", "min_replicas", ""},
-		{`{"pricing_mode":"basic","enable_superuser":false,"nodes":[{"id":"node-1"}]}`, "table", "base", "nodes"},
-		{`{"pricing_mode":"basic","enable_superuser":false}`, "table", "base", "enable_superuser"},
+		{`{"pricing_mode":"basic","enable_superuser":false,"nodes":[{"id":"node-1"}]}`, "table", "BASE", "nodes"},
+		{`{"pricing_mode":"basic","enable_superuser":false}`, "table", "BASE", "enable_superuser"},
 		{`{"pricing_mode":"dedicated","enable_superuser":true}`, "table", "ENABLE_SUPERUSER", ""},
 		{`{"name":"malicious\u001b[31m\nvalue"}`, "table", "malicious", "\x1b"},
 	} {
@@ -73,6 +73,46 @@ func TestHiddenTableFields(t *testing.T) {
 	}
 }
 
+func TestTableStatusUsesUppercase(t *testing.T) {
+	var b bytes.Buffer
+	if err := Print(&b, []byte(`{"deployments":[{"id":"creating","status":"creating"},{"id":"running","status":"RUNNING"}]}`), "table"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), " creating") || !strings.Contains(b.String(), "CREATING") || !strings.Contains(b.String(), "RUNNING") {
+		t.Fatalf("unexpected status casing: %s", b.String())
+	}
+
+	b.Reset()
+	if err := Print(&b, []byte(`{"status":"creating"}`), "json"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), `"creating"`) {
+		t.Fatalf("JSON status must be preserved: %s", b.String())
+	}
+}
+
+func TestDeploymentListOmitsPriceInformation(t *testing.T) {
+	raw := []byte(`{"deployments":[{"id":"dep-1","status":"RUNNING","estimated_price_per_hour_usd":0.31,"estimated_price_per_month_usd":226.30}]}`)
+	var b bytes.Buffer
+	if err := Print(&b, raw, "table"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "PRICE") || strings.Contains(b.String(), "0.31") || strings.Contains(b.String(), "226.3") {
+		t.Fatalf("deployment list includes price information: %s", b.String())
+	}
+	if !strings.Contains(b.String(), "dep-1") || !strings.Contains(b.String(), "RUNNING") {
+		t.Fatalf("deployment list lost summary fields: %s", b.String())
+	}
+
+	b.Reset()
+	if err := Print(&b, raw, "json"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "estimated_price_per_hour_usd") || !strings.Contains(b.String(), "estimated_price_per_month_usd") {
+		t.Fatalf("JSON price information must be preserved: %s", b.String())
+	}
+}
+
 func TestDeploymentListTiers(t *testing.T) {
 	for _, raw := range []string{
 		`{"deployments":[{"id":"pg-base","pricing_mode":"basic"},{"id":"pg-scale","pricing_mode":"dedicated"},{"id":"pg-enterprise","pricing_mode":"enterprise"}]}`,
@@ -86,7 +126,7 @@ func TestDeploymentListTiers(t *testing.T) {
 		if len(lines) != 4 || !strings.Contains(lines[0], "TIER") || strings.Contains(lines[0], "PRICING_MODE") {
 			t.Fatalf("unexpected tier column: %s", b.String())
 		}
-		for i, tier := range []string{"base", "scale", "enterprise"} {
+		for i, tier := range []string{"BASE", "SCALE", "ENTERPRISE"} {
 			if fields := strings.Fields(lines[i+1]); fields[len(fields)-1] != tier {
 				t.Fatalf("expected tier %s: %s", tier, lines[i+1])
 			}
@@ -102,14 +142,26 @@ func TestDeploymentListTiers(t *testing.T) {
 }
 
 func TestPostgresBaseListPreservesReplicas(t *testing.T) {
-	raw := []byte(`{"deployments":[{"id":"pg-base-zero","pricing_mode":"basic","storage_gib":50,"replicas":0},{"id":"pg-base-two","pricing_mode":"basic","storage_gib":50,"replicas":2}]}`)
+	raw := []byte(`{"deployments":[{"id":"pg-base-zero","pricing_mode":"basic","location":"US","storage_gib":50,"replicas":0},{"id":"pg-base-two","pricing_mode":"basic","location":"US","storage_gib":50,"replicas":2}]}`)
 	var b bytes.Buffer
 	if err := Print(&b, raw, "table"); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
-	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), " ") != "ID TIER STORAGE_GIB REPLICAS" || strings.Join(strings.Fields(lines[1]), " ") != "pg-base-zero base 50 0" || strings.Join(strings.Fields(lines[2]), " ") != "pg-base-two base 50 2" {
+	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), " ") != "ID CLOUD REGION TIER STORAGE_GIB REPLICAS" || strings.Join(strings.Fields(lines[1]), " ") != "pg-base-zero Nistro Managed US BASE 50 0" || strings.Join(strings.Fields(lines[2]), " ") != "pg-base-two Nistro Managed US BASE 50 2" {
 		t.Fatalf("unexpected Postgres Base list output: %s", b.String())
+	}
+}
+
+func TestInferenceBaseListShowsManagedPlacement(t *testing.T) {
+	raw := []byte(`{"deployments":[{"id":"inference-base","model_name":"model","dedicated":false,"location":"Europe"}]}`)
+	var b bytes.Buffer
+	if err := Print(&b, raw, "table"); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	if len(lines) != 2 || strings.Join(strings.Fields(lines[0]), " ") != "ID MODEL_NAME CLOUD REGION TIER" || strings.Join(strings.Fields(lines[1]), " ") != "inference-base model Nistro Managed Europe BASE" {
+		t.Fatalf("unexpected Inference Base list output: %s", b.String())
 	}
 }
 

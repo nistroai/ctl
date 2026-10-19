@@ -27,10 +27,12 @@ func Print(w io.Writer, raw json.RawMessage, format string) error {
 		return err
 	}
 	value = redactDetails(value)
+	deploymentList := false
 	if obj, ok := value.(map[string]any); ok {
 		for _, key := range []string{"deployments", "teams", "members", "snapshots", "accounts", "customNetworks", "networks", "invoices", "events", "deployment_options"} {
 			if list, ok := obj[key].([]any); ok {
 				value = list
+				deploymentList = key == "deployments"
 				break
 			}
 		}
@@ -43,8 +45,20 @@ func Print(w io.Writer, raw json.RawMessage, format string) error {
 			_, err := fmt.Fprintln(w, "No results.")
 			return err
 		}
+		if deploymentList {
+			for _, item := range list {
+				row, ok := item.(map[string]any)
+				if !ok || row["tier"] != "base" {
+					continue
+				}
+				if location, exists := row["location"]; exists {
+					row["cloud"] = "Nistro Managed"
+					row["region"] = location
+				}
+			}
+		}
 		var keys []string
-		for _, key := range []string{"id", "name", "email", "model_name", "status", "cloud", "region", "tier", "storage_gib", "replicas", "estimated_price_per_hour_usd"} {
+		for _, key := range []string{"id", "name", "email", "model_name", "status", "cloud", "region", "tier", "storage_gib", "replicas"} {
 			for _, item := range list {
 				if row, ok := item.(map[string]any); ok {
 					if _, exists := row[key]; exists {
@@ -114,7 +128,7 @@ func Table(w io.Writer, rows []map[string]any, columns []string) error {
 		for i, key := range columns {
 			cells[i] = "-"
 			if value, ok := row[key]; ok {
-				cells[i] = cell(value)
+				cells[i] = tableCell(key, value)
 			}
 		}
 		if _, err := fmt.Fprintln(table, strings.Join(cells, "\t")); err != nil {
@@ -122,6 +136,15 @@ func Table(w io.Writer, rows []map[string]any, columns []string) error {
 		}
 	}
 	return table.Flush()
+}
+
+func tableCell(key string, value any) string {
+	if strings.EqualFold(key, "status") || strings.EqualFold(key, "tier") {
+		if text, ok := value.(string); ok {
+			value = strings.ToUpper(text)
+		}
+	}
+	return cell(value)
 }
 
 func cell(v any) string {

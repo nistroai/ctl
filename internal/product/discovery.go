@@ -174,6 +174,7 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				if err := json.Unmarshal(raw, &data); err != nil {
 					return err
 				}
+				removeOfferPriceFields(data)
 				options, _ := data["deployment_options"].([]any)
 				if parent.Name() == "inference" {
 					return printRecommendationsTable(cmd, options, tier)
@@ -183,7 +184,6 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 					for _, offer := range options {
 						if row, ok := offer.(map[string]any); ok {
 							delete(row, "source")
-							delete(row, "estimated_price_per_month_usd")
 							if tier == "scale" {
 								delete(row, "requested_memory_gib")
 								delete(row, "requested_vcpu")
@@ -210,6 +210,23 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 			}
 		}
 		parent.AddCommand(group)
+	}
+}
+
+func removeOfferPriceFields(value any) {
+	switch entry := value.(type) {
+	case map[string]any:
+		for key, child := range entry {
+			if strings.Contains(strings.ToLower(key), "price") {
+				delete(entry, key)
+				continue
+			}
+			removeOfferPriceFields(child)
+		}
+	case []any:
+		for _, child := range entry {
+			removeOfferPriceFields(child)
+		}
 	}
 }
 
@@ -249,7 +266,7 @@ func printOffersTable(cmd *cobra.Command, offers []any) error {
 }
 
 func printRecommendationsTable(cmd *cobra.Command, offers []any, tier string) error {
-	columns := []string{"gpu", "required_vram_gb", "gpu_vram_gb", "tensor_parallel_size", "estimated_price_per_hour_usd", "gpu_memory_utilization"}
+	columns := []string{"gpu", "required_vram_gb", "gpu_vram_gb", "tensor_parallel_size", "gpu_memory_utilization"}
 	if tier == "scale" {
 		columns = append(columns, "cloud", "region", "instance_type")
 	}
@@ -257,9 +274,6 @@ func printRecommendationsTable(cmd *cobra.Command, offers []any, tier string) er
 	for _, offer := range offers {
 		if row, ok := offer.(map[string]any); ok {
 			row["gpu_vram_gb"] = row["actual_vram_gb"]
-			if hourly, ok := row["price_per_hour_usd"].(float64); ok {
-				row["estimated_price_per_hour_usd"] = hourly
-			}
 			if gpu, ok := row["gpu"].(string); !ok || gpu == "" {
 				if value, ok := row["gpu_type"]; ok {
 					row["gpu"] = value

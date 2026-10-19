@@ -135,15 +135,15 @@ func TestRecommendationVRAMColumns(t *testing.T) {
 					t.Fatal(err)
 				}
 				if format == "json" {
-					if !strings.Contains(out.String(), `"actual_vram_gb": 80`) || !strings.Contains(out.String(), `"gpu_vram_gb": 40`) {
+					if !strings.Contains(out.String(), `"actual_vram_gb": 80`) || !strings.Contains(out.String(), `"gpu_vram_gb": 40`) || !strings.Contains(out.String(), `"price_per_hour_usd": 0.1727`) {
 						t.Fatal("JSON response fields changed")
 					}
 					return
 				}
 				lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 				headers, cells := strings.Fields(lines[0]), strings.Fields(lines[1])
-				if !strings.Contains(out.String(), "ESTIMATED_PRICE_PER_HOUR_USD") || !strings.Contains(out.String(), "0.1727") || strings.Contains(out.String(), "ESTIMATED_PRICE_PER_MONTH_USD") {
-					t.Fatalf("hourly recommendation price missing: %s", out.String())
+				if strings.Contains(out.String(), "PRICE") || strings.Contains(out.String(), "0.1727") {
+					t.Fatalf("recommendation table includes price information: %s", out.String())
 				}
 				want := "80"
 				for i, header := range headers {
@@ -157,9 +157,9 @@ func TestRecommendationVRAMColumns(t *testing.T) {
 	}
 }
 
-func TestOffersOmitMonthlyPrice(t *testing.T) {
+func TestOfferTablesOmitPriceInformation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"estimated_price_per_month_usd":126.07,"deployment_options":[{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"source":"catalog","requested_vcpu":2}]}`)
+		fmt.Fprint(w, `{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"deployment_options":[{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"source":"catalog","requested_vcpu":2}]}`)
 	}))
 	defer server.Close()
 	for _, tier := range []string{"base", "scale"} {
@@ -179,14 +179,12 @@ func TestOffersOmitMonthlyPrice(t *testing.T) {
 				if err := command.ExecuteContext(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(strings.ToLower(out.String()), "estimated_price_per_month_usd") || strings.Contains(out.String(), "126.07") {
-					t.Fatalf("monthly price still present: %s", out.String())
-				}
-				if !strings.Contains(out.String(), "0.1727") {
-					t.Fatal("hourly price missing")
-				}
-				if format == "json" && (!strings.Contains(out.String(), `"source": "catalog"`) || progress.Len() != 0) {
-					t.Fatal("other JSON fields or progress behavior changed")
+				if format == "json" {
+					if !strings.Contains(out.String(), "0.1727") || strings.Contains(out.String(), "126.07") || !strings.Contains(out.String(), `"source": "catalog"`) || progress.Len() != 0 {
+						t.Fatalf("JSON price or progress behavior changed: %s", out.String())
+					}
+				} else if strings.Contains(strings.ToLower(out.String()), "price") || strings.Contains(out.String(), "0.1727") || strings.Contains(out.String(), "126.07") {
+					t.Fatalf("offer table includes price information: %s", out.String())
 				}
 			})
 		}
