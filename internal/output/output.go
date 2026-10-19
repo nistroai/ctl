@@ -43,15 +43,8 @@ func Print(w io.Writer, raw json.RawMessage, format string) error {
 			_, err := fmt.Fprintln(w, "No results.")
 			return err
 		}
-		for _, item := range list {
-			if row, ok := item.(map[string]any); ok && row["tier"] == "base" {
-				if _, postgres := row["storage_gib"]; postgres {
-					row["replicas"] = 1
-				}
-			}
-		}
 		var keys []string
-		for _, key := range []string{"id", "name", "email", "model_name", "status", "cloud", "region", "tier", "storage_gib", "replicas"} {
+		for _, key := range []string{"id", "name", "email", "model_name", "status", "cloud", "region", "tier", "storage_gib", "replicas", "estimated_price_per_hour_usd"} {
 			for _, item := range list {
 				if row, ok := item.(map[string]any); ok {
 					if _, exists := row[key]; exists {
@@ -96,6 +89,14 @@ func Table(w io.Writer, rows []map[string]any, columns []string) error {
 		}
 		sort.Strings(columns)
 	}
+	visible := make([]string, 0, len(columns))
+	for _, key := range columns {
+		if hiddenTableColumn(key) {
+			continue
+		}
+		visible = append(visible, key)
+	}
+	columns = visible
 	if len(columns) == 0 {
 		_, err := fmt.Fprintln(w, "No results.")
 		return err
@@ -166,6 +167,10 @@ func redactDetails(value any) any {
 			}
 		}
 		for key, entry := range v {
+			if hiddenTableColumn(key) {
+				delete(v, key)
+				continue
+			}
 			lower := strings.ToLower(key)
 			if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") {
 				v[key] = "[redacted; use --output json to retrieve]"
@@ -179,6 +184,15 @@ func redactDetails(value any) any {
 		}
 	}
 	return value
+}
+
+func hiddenTableColumn(key string) bool {
+	key = strings.ToLower(key)
+	switch key {
+	case "status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url":
+		return true
+	}
+	return strings.HasPrefix(key, "estimated_price_") && key != "estimated_price_per_hour_usd"
 }
 
 // DeploymentTier translates API tier fields into the labels used by the UI.

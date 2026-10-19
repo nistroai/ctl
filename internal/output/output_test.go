@@ -11,7 +11,7 @@ func TestOutput(t *testing.T) {
 	for _, tc := range []struct{ raw, format, want, absent string }{
 		{`{"deployments":[]}`, "table", "No results.", ""},
 		{`{"deployments":[{"id":"dep-1","status":"running"}]}`, "table", "dep-1", ""},
-		{`{"deployment":{"id":"dep-1","database_password":"secret"}}`, "table", "[redacted", "secret"},
+		{`{"deployment":{"id":"dep-1","database_password":"secret"}}`, "table", "dep-1", "DATABASE_PASSWORD"},
 		{`{"id":"dep-1","api_key":"secret"}`, "json", "secret", ""},
 		{`{"connection":{"password":"secret","apiKey":"secret"}}`, "table", "redacted", "secret"},
 		{`{"value":9007199254740993}`, "json", "9007199254740993", ""},
@@ -30,6 +30,45 @@ func TestOutput(t *testing.T) {
 		}
 		if !strings.Contains(b.String(), tc.want) || (tc.absent != "" && strings.Contains(b.String(), tc.absent)) {
 			t.Errorf("unexpected output %s", b.String())
+		}
+	}
+}
+
+func TestHiddenTableFields(t *testing.T) {
+	record := `{"id":"dep-1","status_message":"starting deployment","cluster_status":"RUNNING","ready_instances":2,"current_primary":"node-1","dedicated":true,"database_password":"secret","vllm_api_key":"vllm-secret","omnistrate_instance_id":"instance-1","endpoint_url":"https://inference.example","reader_endpoint_url":"https://reader.example","writer_endpoint_url":"https://writer.example","estimated_price_per_hour_usd":0.31,"estimated_price_per_month_usd":226.30,"estimated_price_per_year_usd":2715.60}`
+	for _, raw := range []string{record, `{"deployment":` + record + `}`, `[` + record + `]`, `{"details":` + record + `}`} {
+		var b bytes.Buffer
+		if err := Print(&b, []byte(raw), "table"); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url", "estimated_price_per_month_usd", "estimated_price_per_year_usd", "starting deployment", "RUNNING", "node-1", "secret", "instance-1", "https://inference.example", "https://reader.example", "https://writer.example", "226.3", "2715.6"} {
+			if strings.Contains(strings.ToLower(b.String()), field) {
+				t.Fatalf("table includes hidden field or value %q: %s", field, b.String())
+			}
+		}
+		if !strings.Contains(b.String(), "dep-1") {
+			t.Fatalf("table lost deployment ID: %s", b.String())
+		}
+		b.Reset()
+		if err := Print(&b, []byte(raw), "json"); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url", "estimated_price_per_hour_usd", "estimated_price_per_month_usd", "estimated_price_per_year_usd"} {
+			if !strings.Contains(b.String(), field) {
+				t.Fatalf("JSON lost field %q: %s", field, b.String())
+			}
+		}
+	}
+
+	rows := []map[string]any{{"id": "dep-1", "status_message": "starting deployment", "cluster_status": "RUNNING", "ready_instances": 2, "current_primary": "node-1", "dedicated": true, "database_password": "secret", "vllm_api_key": "vllm-secret", "omnistrate_instance_id": "instance-1", "endpoint_url": "https://inference.example", "reader_endpoint_url": "https://reader.example", "writer_endpoint_url": "https://writer.example", "estimated_price_per_hour_usd": 0.31, "estimated_price_per_month_usd": 226.30}}
+	for _, columns := range [][]string{nil, {"id", "status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url", "estimated_price_per_hour_usd", "estimated_price_per_month_usd"}} {
+		var b bytes.Buffer
+		if err := Table(&b, rows, columns); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Fields(b.String())
+		if len(got) != 4 || !strings.Contains(b.String(), "ESTIMATED_PRICE_PER_HOUR_USD") || !strings.Contains(b.String(), "ID") || !strings.Contains(b.String(), "0.31") || !strings.Contains(b.String(), "dep-1") {
+			t.Fatalf("unexpected direct table output: %s", b.String())
 		}
 	}
 }
@@ -59,6 +98,18 @@ func TestDeploymentListTiers(t *testing.T) {
 		if strings.Contains(b.String(), `"tier"`) {
 			t.Fatalf("JSON must preserve API fields: %s", b.String())
 		}
+	}
+}
+
+func TestPostgresBaseListPreservesReplicas(t *testing.T) {
+	raw := []byte(`{"deployments":[{"id":"pg-base-zero","pricing_mode":"basic","storage_gib":50,"replicas":0},{"id":"pg-base-two","pricing_mode":"basic","storage_gib":50,"replicas":2}]}`)
+	var b bytes.Buffer
+	if err := Print(&b, raw, "table"); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), " ") != "ID TIER STORAGE_GIB REPLICAS" || strings.Join(strings.Fields(lines[1]), " ") != "pg-base-zero base 50 0" || strings.Join(strings.Fields(lines[2]), " ") != "pg-base-two base 50 2" {
+		t.Fatalf("unexpected Postgres Base list output: %s", b.String())
 	}
 }
 
