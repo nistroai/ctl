@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"nistro-ctl/internal/api"
+	"nistro-ctl/internal/buildinfo"
 	postgresproduct "nistro-ctl/internal/products/postgres"
 	vllmproduct "nistro-ctl/internal/products/vllm"
 )
@@ -18,10 +19,26 @@ var rootCfg struct {
 }
 
 var rootCmd = &cobra.Command{
-	Use:           "nistro",
-	Short:         "Manage Nistro services",
-	SilenceUsage:  true,
-	SilenceErrors: true,
+	Use:               "nistro",
+	Short:             "Manage Nistro services",
+	Version:           buildinfo.String(),
+	SilenceUsage:      true,
+	SilenceErrors:     true,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if cmd == loginCmd || cmd == logoutCmd || cmd.Name() == "completion" || cmd.Parent() != nil && cmd.Parent().Name() == "completion" {
+			return nil
+		}
+		if rootCfg.token != "" {
+			return nil
+		}
+		token, err := loadSession(rootCfg.server)
+		if err != nil {
+			return err
+		}
+		rootCfg.token = token
+		return nil
+	},
 }
 
 func Execute() {
@@ -32,10 +49,11 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&rootCfg.server, "server", env("NISTRO_SERVER", "http://127.0.0.1:8080"), "Nistro server URL")
-	rootCmd.PersistentFlags().StringVar(&rootCfg.token, "token", env("NISTRO_TOKEN", ""), "Omnistrate customer JWT")
+	rootCmd.SetVersionTemplate("nistro {{.Version}}\n")
+	rootCmd.PersistentFlags().StringVar(&rootCfg.server, "server", env("NISTRO_SERVER", "https://api.nistro.ai"), "Nistro server URL")
+	rootCfg.token = env("NISTRO_TOKEN", "")
 	registerProducts(vllmproduct.New(), postgresproduct.New())
-	rootCmd.AddCommand(authCmd, usageCmd, billingCmd, cloudAccountsCmd)
+	rootCmd.AddCommand(loginCmd, logoutCmd)
 }
 
 func client() *api.Client {
