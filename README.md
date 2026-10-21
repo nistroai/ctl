@@ -25,6 +25,9 @@ The installer verifies the release checksum and places `nistro` in
 curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -s -- --version v0.1.0
 ```
 
+Pull requests and merge-queue checks targeting `main` run `go test ./...` and
+build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
+
 Merges to `main` automatically create the next semantic-version tag and publish
 archives for Linux, macOS, and Windows on AMD64 and ARM64. The default version
 bump is a patch; include `#minor` or `#major` in the merge commit message for a
