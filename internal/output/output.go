@@ -9,8 +9,13 @@ import (
 	"text/tabwriter"
 )
 
+// TableOptions controls optional fields in table output.
+type TableOptions struct {
+	ShowHourlyPrice bool
+}
+
 // JSON preserves the entire API response. Tables favor stable summary fields.
-func Print(w io.Writer, raw json.RawMessage, format string) error {
+func Print(w io.Writer, raw json.RawMessage, format string, options ...TableOptions) error {
 	if format == "json" {
 		var v any
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -26,7 +31,7 @@ func Print(w io.Writer, raw json.RawMessage, format string) error {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return err
 	}
-	value = redactDetails(value)
+	value = redactDetails(value, options...)
 	deploymentList := false
 	if obj, ok := value.(map[string]any); ok {
 		for _, key := range []string{"deployments", "teams", "members", "snapshots", "accounts", "customNetworks", "networks", "invoices", "events", "deployment_options"} {
@@ -76,17 +81,17 @@ func Print(w io.Writer, raw json.RawMessage, format string) error {
 				rows = append(rows, map[string]any{"value": item})
 			}
 		}
-		return Table(w, rows, keys)
+		return Table(w, rows, keys, options...)
 	}
 	if obj, ok := value.(map[string]any); ok {
-		return Table(w, []map[string]any{obj}, nil)
+		return Table(w, []map[string]any{obj}, nil, options...)
 	}
-	return Table(w, []map[string]any{{"value": value}}, nil)
+	return Table(w, []map[string]any{{"value": value}}, nil, options...)
 }
 
 // Table renders records horizontally with consistent headers and spacing.
 // Empty columns selects all fields in sorted order.
-func Table(w io.Writer, rows []map[string]any, columns []string) error {
+func Table(w io.Writer, rows []map[string]any, columns []string, options ...TableOptions) error {
 	if len(rows) == 0 {
 		_, err := fmt.Fprintln(w, "No results.")
 		return err
@@ -105,7 +110,7 @@ func Table(w io.Writer, rows []map[string]any, columns []string) error {
 	}
 	visible := make([]string, 0, len(columns))
 	for _, key := range columns {
-		if hiddenTableColumn(key) {
+		if hiddenTableColumn(key, options...) {
 			continue
 		}
 		visible = append(visible, key)
@@ -166,7 +171,7 @@ func cell(v any) string {
 	}, s)
 }
 
-func redactDetails(value any) any {
+func redactDetails(value any, options ...TableOptions) any {
 	switch v := value.(type) {
 	case map[string]any:
 		delete(v, "can_write")
@@ -190,7 +195,7 @@ func redactDetails(value any) any {
 			}
 		}
 		for key, entry := range v {
-			if hiddenTableColumn(key) {
+			if hiddenTableColumn(key, options...) {
 				delete(v, key)
 				continue
 			}
@@ -198,24 +203,27 @@ func redactDetails(value any) any {
 			if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") {
 				v[key] = "[redacted; use --output json to retrieve]"
 			} else {
-				v[key] = redactDetails(entry)
+				v[key] = redactDetails(entry, options...)
 			}
 		}
 	case []any:
 		for i, entry := range v {
-			v[i] = redactDetails(entry)
+			v[i] = redactDetails(entry, options...)
 		}
 	}
 	return value
 }
 
-func hiddenTableColumn(key string) bool {
+func hiddenTableColumn(key string, options ...TableOptions) bool {
 	key = strings.ToLower(key)
+	if key == "estimated_price_per_hour_usd" && len(options) > 0 && options[0].ShowHourlyPrice {
+		return false
+	}
 	switch key {
 	case "status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url":
 		return true
 	}
-	return strings.HasPrefix(key, "estimated_price_") && key != "estimated_price_per_hour_usd"
+	return strings.Contains(key, "price")
 }
 
 // DeploymentTier translates API tier fields into the labels used by the UI.

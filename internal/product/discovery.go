@@ -81,12 +81,22 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 		addPlacements(parent, deps)
 	}
 	names := []string{"offers"}
+	if parent.Name() == "inference" {
+		names = []string{"recommend-hardware"}
+	}
 	for _, name := range names {
 		group := &cobra.Command{Use: name, Short: "Show " + name + " before creating or updating deployments"}
 		tiers := []string{"base", "scale"}
+		if parent.Name() == "inference" {
+			group.Short = "Recommend hardware before creating or updating Inference Scale deployments"
+			tiers = []string{"scale"}
+		}
 		for _, tier := range tiers {
 			fields, required := discoveryFields(parent.Name(), tier)
 			cmd := &cobra.Command{Use: tier, Short: "Show " + tier + " " + name, Args: cobra.NoArgs}
+			if parent.Name() == "inference" {
+				cmd.Short = "Recommend hardware for a " + tier + " inference deployment"
+			}
 			cmd.Flags().String("config-file", "", "JSON configuration file; use - to read from stdin")
 			for _, field := range fields {
 				flag := strings.ReplaceAll(field.key, "_", "-")
@@ -150,12 +160,16 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 				defer cancel()
 				var progress *progressLine
+				progressName := "offers"
+				if parent.Name() == "inference" {
+					progressName = "hardware recommendations"
+				}
 				if format != "json" {
-					progress = startProgress(cmd.ErrOrStderr(), "Loading "+name)
+					progress = startProgress(cmd.ErrOrStderr(), "Loading "+progressName)
 				}
 				raw, err := deps.Client().Resource(ctx, method, path, body)
 				if progress != nil {
-					progress.finish("Loaded "+name, err == nil)
+					progress.finish("Loaded "+progressName, err == nil)
 				}
 				if err != nil {
 					return err
@@ -174,7 +188,8 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				if err := json.Unmarshal(raw, &data); err != nil {
 					return err
 				}
-				removeOfferPriceFields(data)
+				tableOptions := output.TableOptions{ShowHourlyPrice: parent.Name() == "postgres" && tier == "scale"}
+				removeOfferPriceFields(data, tableOptions.ShowHourlyPrice)
 				options, _ := data["deployment_options"].([]any)
 				if parent.Name() == "inference" {
 					return printRecommendationsTable(cmd, options, tier)
@@ -193,12 +208,12 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				}
 				if len(data) > 0 {
 					metadata, _ := json.Marshal(data)
-					if err := output.Print(cmd.OutOrStdout(), metadata, "table"); err != nil {
+					if err := output.Print(cmd.OutOrStdout(), metadata, "table", tableOptions); err != nil {
 						return err
 					}
 				}
 				if len(options) > 0 {
-					return printOffersTable(cmd, options)
+					return printOffersTable(cmd, options, tableOptions)
 				}
 				if len(options) == 0 && len(data) == 0 {
 					fmt.Fprintln(cmd.OutOrStdout(), "No results.")
@@ -213,19 +228,19 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 	}
 }
 
-func removeOfferPriceFields(value any) {
+func removeOfferPriceFields(value any, showHourlyPrice bool) {
 	switch entry := value.(type) {
 	case map[string]any:
 		for key, child := range entry {
-			if strings.Contains(strings.ToLower(key), "price") {
+			if lower := strings.ToLower(key); strings.Contains(lower, "price") && !(showHourlyPrice && lower == "estimated_price_per_hour_usd") {
 				delete(entry, key)
 				continue
 			}
-			removeOfferPriceFields(child)
+			removeOfferPriceFields(child, showHourlyPrice)
 		}
 	case []any:
 		for _, child := range entry {
-			removeOfferPriceFields(child)
+			removeOfferPriceFields(child, showHourlyPrice)
 		}
 	}
 }
@@ -255,14 +270,14 @@ func withoutMonthlyOfferPrice(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(value)
 }
 
-func printOffersTable(cmd *cobra.Command, offers []any) error {
+func printOffersTable(cmd *cobra.Command, offers []any, options output.TableOptions) error {
 	rows := make([]map[string]any, 0, len(offers))
 	for _, offer := range offers {
 		if row, ok := offer.(map[string]any); ok {
 			rows = append(rows, row)
 		}
 	}
-	return output.Table(cmd.OutOrStdout(), rows, nil)
+	return output.Table(cmd.OutOrStdout(), rows, nil, options)
 }
 
 func printRecommendationsTable(cmd *cobra.Command, offers []any, tier string) error {

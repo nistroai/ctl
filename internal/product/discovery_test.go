@@ -66,9 +66,9 @@ func TestDiscoveryRejectsFieldsOutsideWebsiteForms(t *testing.T) {
 	}{
 		{vllm.New(), []string{"quantizations", "--quantization", "awq"}, ""},
 		{vllm.New(), []string{"quantizations", "--gpu-type", "H100"}, ""},
-		{vllm.New(), []string{"offers", "base", "--cloud", "aws"}, ""},
-		{vllm.New(), []string{"offers", "scale", "--replicas", "2"}, ""},
-		{vllm.New(), []string{"offers", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","region":"us-east-1"}`},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--cloud", "aws"}, ""},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--replicas", "2"}, ""},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","region":"us-east-1"}`},
 		{postgres.New(), []string{"offers", "base", "--cloud", "aws"}, ""},
 		{postgres.New(), []string{"offers", "base", "--memory-gib", "8"}, ""},
 		{postgres.New(), []string{"offers", "scale", "--vcpu", "2"}, ""},
@@ -118,19 +118,42 @@ func TestPostgresPlacements(t *testing.T) {
 	}
 }
 
-func TestRecommendationVRAMColumns(t *testing.T) {
+func TestInferenceHardwareRecommendationCommands(t *testing.T) {
+	command := vllm.New().Command(product.Deps{})
+	found := false
+	for _, child := range command.Commands() {
+		if child.Name() == "offers" || child.HasAlias("offers") {
+			t.Fatal("inference still exposes offers")
+		}
+		if child.Name() == "recommend-hardware" {
+			found = true
+			tiers := child.Commands()
+			if len(tiers) != 1 || tiers[0].Name() != "scale" {
+				t.Fatal("hardware recommendations must be Scale-only")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("inference is missing recommend-hardware")
+	}
+}
+
+func TestInferenceHardwareRecommendations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/recommendations" {
+			t.Errorf("unexpected recommendation request: %s %s", r.Method, r.URL.Path)
+		}
 		fmt.Fprint(w, `{"deployment_options":[{"gpu":"A100","actual_vram_gb":80,"gpu_vram_gb":40,"price_per_hour_usd":0.1727}]}`)
 	}))
 	defer server.Close()
-	for _, tier := range []string{"base", "scale"} {
+	for _, tier := range []string{"scale"} {
 		for _, format := range []string{"table", "json"} {
 			t.Run(tier+"/"+format, func(t *testing.T) {
 				command := vllm.New().Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
 				var out bytes.Buffer
 				command.SetOut(&out)
 				command.SetErr(&bytes.Buffer{})
-				command.SetArgs([]string{"offers", tier, "--model-url", "org/model", "--max-model-len", "32768", "--location", "US", "-o", format})
+				command.SetArgs([]string{"recommend-hardware", tier, "--model-url", "org/model", "--max-model-len", "32768", "--location", "US", "-o", format})
 				if err := command.ExecuteContext(t.Context()); err != nil {
 					t.Fatal(err)
 				}
@@ -157,9 +180,9 @@ func TestRecommendationVRAMColumns(t *testing.T) {
 	}
 }
 
-func TestOfferTablesOmitPriceInformation(t *testing.T) {
+func TestPostgresOfferPriceInformation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"deployment_options":[{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"source":"catalog","requested_vcpu":2}]}`)
+		fmt.Fprint(w, `{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"deployment_options":[{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"compute_price_per_hour_usd":0.15,"storage_price_per_month_usd":16.57,"source":"catalog","requested_vcpu":2}]}`)
 	}))
 	defer server.Close()
 	for _, tier := range []string{"base", "scale"} {
@@ -182,6 +205,15 @@ func TestOfferTablesOmitPriceInformation(t *testing.T) {
 				if format == "json" {
 					if !strings.Contains(out.String(), "0.1727") || strings.Contains(out.String(), "126.07") || !strings.Contains(out.String(), `"source": "catalog"`) || progress.Len() != 0 {
 						t.Fatalf("JSON price or progress behavior changed: %s", out.String())
+					}
+				} else if tier == "scale" {
+					if strings.Count(out.String(), "ESTIMATED_PRICE_PER_HOUR_USD") != 2 || strings.Count(out.String(), "0.1727") != 2 {
+						t.Fatalf("Scale offer metadata or rows lost hourly price: %s", out.String())
+					}
+					for _, hidden := range []string{"ESTIMATED_PRICE_PER_MONTH_USD", "COMPUTE_PRICE", "STORAGE_PRICE", "126.07", "0.15", "16.57", "SOURCE", "REQUESTED_VCPU"} {
+						if strings.Contains(out.String(), hidden) {
+							t.Fatalf("Scale offer table includes hidden field or value %q: %s", hidden, out.String())
+						}
 					}
 				} else if strings.Contains(strings.ToLower(out.String()), "price") || strings.Contains(out.String(), "0.1727") || strings.Contains(out.String(), "126.07") {
 					t.Fatalf("offer table includes price information: %s", out.String())

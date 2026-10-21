@@ -68,8 +68,7 @@ tier before updating; the server validates expansions and version upgrades.
 Inspect model and placement options before selecting create/update inputs:
 
 ```bash
-nistro inference offers base --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US
-nistro inference offers scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US -o json
+nistro inference recommend-hardware scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US -o json
 nistro postgres placements scale
 nistro postgres offers base --vcpu 2 --storage-gib 50 --location US
 nistro postgres offers scale --storage-gib 100 --cloud aws --region us-east-1 --replicas 2 -o json
@@ -79,21 +78,24 @@ Discovery commands accept only the fields used by the website:
 
 | Command | Inputs |
 | --- | --- |
-| Inference offers Base/Scale | Model URL/ID, context length, location, optional quantization and GPU type |
+| Inference recommend-hardware Scale | Model URL/ID, context length, location, optional quantization and GPU type |
 | Postgres offers Base | vCPU, storage, location; memory is calculated at 4 GiB per vCPU |
 | Postgres offers Scale | Required storage, cloud, and region; optional instance type and standby replicas (0–8, plus one primary); compute is resolved from placement |
 | Postgres placements Scale | No inputs; lists available clouds, regions, and instance types |
 
-Inference and Postgres offers also accept `--config-file`.
-Inference offer tables show GPU, required VRAM, actual GPU VRAM, tensor parallel
-size, and GPU memory utilization. Scale also shows cloud, region, and instance
-type. All offer tables omit price information. Postgres offer tables also omit
-source; Scale also omits requested CPU and memory. Postgres offers and
-create/update responses omit `estimated_price_per_month_usd` in JSON output.
+Inference hardware recommendations and Postgres offers also accept `--config-file`.
+Inference hardware recommendations are available for Scale.
+Recommendation tables show GPU, required VRAM, actual GPU VRAM, tensor parallel
+size, GPU memory utilization, cloud, region, and instance
+type. `postgres offers scale` tables show `estimated_price_per_hour_usd`.
+Other CLI tables and hardware selectors omit price information.
+Postgres offer tables also omit source; Scale also omits requested CPU and memory.
+Postgres offers and create/update responses omit `estimated_price_per_month_usd`
+in JSON output.
 
 JSON output preserves other API fields and contains no progress messages.
 Placements uses `/v1/postgres/scale/catalog`. Inference placement choices come
-from inference offers; there is no separate inference placement API.
+from hardware recommendations; there is no separate inference placement API.
 
 Useful commands:
 
