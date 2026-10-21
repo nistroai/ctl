@@ -41,7 +41,7 @@ func TestHiddenTableFields(t *testing.T) {
 		if err := Print(&b, []byte(raw), "table"); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url", "estimated_price_per_month_usd", "estimated_price_per_year_usd", "starting deployment", "RUNNING", "node-1", "secret", "instance-1", "https://inference.example", "https://reader.example", "https://writer.example", "226.3", "2715.6"} {
+		for _, field := range []string{"status_message", "cluster_status", "ready_instances", "current_primary", "dedicated", "database_password", "vllm_api_key", "omnistrate_instance_id", "endpoint_url", "reader_endpoint_url", "writer_endpoint_url", "estimated_price_per_hour_usd", "estimated_price_per_month_usd", "estimated_price_per_year_usd", "starting deployment", "RUNNING", "node-1", "secret", "instance-1", "https://inference.example", "https://reader.example", "https://writer.example", "0.31", "226.3", "2715.6"} {
 			if strings.Contains(strings.ToLower(b.String()), field) {
 				t.Fatalf("table includes hidden field or value %q: %s", field, b.String())
 			}
@@ -67,7 +67,7 @@ func TestHiddenTableFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := strings.Fields(b.String())
-		if len(got) != 4 || !strings.Contains(b.String(), "ESTIMATED_PRICE_PER_HOUR_USD") || !strings.Contains(b.String(), "ID") || !strings.Contains(b.String(), "0.31") || !strings.Contains(b.String(), "dep-1") {
+		if len(got) != 2 || got[0] != "ID" || got[1] != "dep-1" {
 			t.Fatalf("unexpected direct table output: %s", b.String())
 		}
 	}

@@ -36,9 +36,9 @@ func TestProductOperations(t *testing.T) {
 						t.Errorf("request: %s %s", r.Method, r.URL.Path)
 					}
 					if operation == "list" {
-						fmt.Fprint(w, `{"deployments":[{"id":"dep-1","model_name":"model","status":"running","pricing_mode":"basic","api_key":"secret","extra":"hidden"}]}`)
+						fmt.Fprint(w, `{"deployments":[{"id":"dep-1","model_name":"model","status":"running","pricing_mode":"basic","api_key":"secret","extra":"hidden","estimated_price_per_hour_usd":0.31}]}`)
 					} else {
-						fmt.Fprint(w, `{"deployment":{"id":"dep-1","api_key":"secret","extra":"visible"}}`)
+						fmt.Fprint(w, `{"deployment":{"id":"dep-1","api_key":"secret","extra":"visible","estimated_price_per_hour_usd":0.31}}`)
 					}
 				}))
 				defer server.Close()
@@ -65,6 +65,9 @@ func TestProductOperations(t *testing.T) {
 				if strings.Contains(output.String(), "secret") {
 					t.Fatal("table leaked credentials")
 				}
+				if strings.Contains(output.String(), "PRICE") || strings.Contains(output.String(), "0.31") {
+					t.Fatalf("table includes price information: %s", output.String())
+				}
 				if operation == "list" && (strings.Contains(output.String(), "hidden") || !strings.Contains(output.String(), "MODEL_NAME")) {
 					t.Fatal("list summary fields differ")
 				}
@@ -76,6 +79,9 @@ func TestProductOperations(t *testing.T) {
 				}
 				if !strings.Contains(output.String(), "secret") {
 					t.Fatal("JSON did not preserve API response")
+				}
+				if !strings.Contains(output.String(), `"estimated_price_per_hour_usd": 0.31`) {
+					t.Fatalf("JSON lost API price field: %s", output.String())
 				}
 				if progress.Len() != 0 {
 					t.Fatalf("JSON output included progress: %s", progress.String())

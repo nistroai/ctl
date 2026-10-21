@@ -26,7 +26,6 @@ func NewOfferSelector(offers []api.Offer) *OfferSelector {
 		{Title: "Instance", Width: 26},
 		{Title: "GPU", Width: 16},
 		{Title: "Mode", Width: 14},
-		{Title: "$/hr", Width: 10},
 	}
 	rows := make([]table.Row, 0, len(offers))
 	for _, offer := range offers {
@@ -40,7 +39,6 @@ func NewOfferSelector(offers []api.Offer) *OfferSelector {
 			offer.SKU,
 			firstNonEmpty(offer.GPUType, offer.GPU),
 			mode,
-			fmt.Sprintf("%.4f", offer.PricePerHourUSD),
 		})
 	}
 	t := table.New(
@@ -64,7 +62,6 @@ func NewPostgresOfferSelector(offers []api.PostgresOffer) *OfferSelector {
 		{Title: "CPU", Width: 8},
 		{Title: "Memory", Width: 9},
 		{Title: "Storage", Width: 16},
-		{Title: "Est", Width: 16},
 	}
 	rows := make([]table.Row, 0, len(offers))
 	generic := make([]api.Offer, 0, len(offers))
@@ -76,13 +73,11 @@ func NewPostgresOfferSelector(offers []api.PostgresOffer) *OfferSelector {
 			fmt.Sprintf("%.3g", offer.VCPU),
 			fmt.Sprintf("%.3g Gi", offer.RAMGiB),
 			fmt.Sprintf("%.3g Gi %s", offer.StorageGiB, offer.StorageType),
-			fmt.Sprintf("$%.4f/hr $%.2f/mo", offer.EstimatedPricePerHourUSD, offer.EstimatedPricePerMonthUSD),
 		})
 		generic = append(generic, api.Offer{
-			Cloud:           offer.Cloud,
-			Region:          offer.Region,
-			SKU:             offer.InstanceType,
-			PricePerHourUSD: offer.EstimatedPricePerHourUSD,
+			Cloud:  offer.Cloud,
+			Region: offer.Region,
+			SKU:    offer.InstanceType,
 		})
 	}
 	t := table.New(
