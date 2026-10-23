@@ -21,7 +21,7 @@ func discoveryFields(name, tier string) ([]inputField, []string) {
 		return append(model, inputField{"quantization", "string", "Quantization (default Auto)"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"location", "string", "Required location: US, EU, or ASIA"}), []string{"model_url", "max_model_len", "location"}
 	}
 	fields := []inputField{{"storage_gib", "number", "Required storage size in GiB"}}
-	if tier == "base" {
+	if tier == "on-demand" {
 		return append(fields, inputField{"vcpu", "int", "Required integer vCPUs from 1 to 8; memory is 4 GiB per vCPU"}, inputField{"location", "string", "Required location: US, EU, or ASIA"}), []string{"vcpu", "storage_gib", "location"}
 	}
 	return append(fields, inputField{"cloud", "string", "Required cloud provider"}, inputField{"region", "string", "Required cloud region"}, inputField{"instance_type", "string", "Instance type (omit for Any); determines compute capacity"}, inputField{"replicas", "int", "Standby replicas from 0 to 8 (plus one primary; default 1)"}), []string{"storage_gib", "cloud", "region"}
@@ -86,16 +86,16 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 	}
 	for _, name := range names {
 		group := &cobra.Command{Use: name, Short: "Show " + name + " before creating or updating deployments"}
-		tiers := []string{"base", "scale"}
+		tiers := []string{"on-demand", "scale"}
 		if parent.Name() == "inference" {
 			group.Short = "Recommend hardware before creating or updating Inference Scale deployments"
 			tiers = []string{"scale"}
 		}
 		for _, tier := range tiers {
 			fields, required := discoveryFields(parent.Name(), tier)
-			cmd := &cobra.Command{Use: tier, Short: "Show " + tier + " " + name, Args: cobra.NoArgs}
+			cmd := &cobra.Command{Use: tier, Short: "Show " + tierLabel(tier) + " " + name, Args: cobra.NoArgs}
 			if parent.Name() == "inference" {
-				cmd.Short = "Recommend hardware for a " + tier + " inference deployment"
+				cmd.Short = "Recommend hardware for a " + tierLabel(tier) + " inference deployment"
 			}
 			cmd.Flags().String("config-file", "", "JSON configuration file; use - to read from stdin")
 			for _, field := range fields {
@@ -139,7 +139,7 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				body["pricing_mode"] = mode
 				method, path := "POST", "/v1/postgres/offers"
 				if parent.Name() == "postgres" {
-					if tier == "base" {
+					if tier == "on-demand" {
 						body["memory_gib"] = number(body["vcpu"]) * 4
 					} else {
 						// Match the website's Any-instance request; the server filters pinned placements.
