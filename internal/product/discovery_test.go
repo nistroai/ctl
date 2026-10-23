@@ -15,7 +15,7 @@ import (
 	"nistro-ctl/internal/products/vllm"
 )
 
-func TestPostgresBaseOfferVCPU(t *testing.T) {
+func TestPostgresOnDemandOfferVCPU(t *testing.T) {
 	for _, value := range []string{"1", "2", "8", "0", "9", "-1", "0.5", "2.5"} {
 		for _, inputMethod := range []string{"flags", "config"} {
 			t.Run(value+"/"+inputMethod, func(t *testing.T) {
@@ -34,13 +34,16 @@ func TestPostgresBaseOfferVCPU(t *testing.T) {
 					if fmt.Sprint(cpu) != value || body["memory_gib"] != cpu*4 {
 						t.Errorf("unexpected offer capacity: %v", body)
 					}
+					if body["pricing_mode"] != "basic" {
+						t.Errorf("unexpected On-Demand API pricing mode: %v", body["pricing_mode"])
+					}
 					fmt.Fprint(w, `{"deployment_options":[]}`)
 				}))
 				defer server.Close()
 				command := postgres.New().Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
-				args := []string{"offers", "base", "--vcpu", value, "--storage-gib", "50", "--location", "US"}
+				args := []string{"offers", "on-demand", "--vcpu", value, "--storage-gib", "50", "--location", "US"}
 				if inputMethod == "config" {
-					args = []string{"offers", "base", "--config-file", "-"}
+					args = []string{"offers", "on-demand", "--config-file", "-"}
 					command.SetIn(strings.NewReader(fmt.Sprintf(`{"vcpu":%s,"storage_gib":50,"location":"US"}`, value)))
 				}
 				command.SetArgs(args)
@@ -69,8 +72,8 @@ func TestDiscoveryRejectsFieldsOutsideWebsiteForms(t *testing.T) {
 		{vllm.New(), []string{"recommend-hardware", "scale", "--cloud", "aws"}, ""},
 		{vllm.New(), []string{"recommend-hardware", "scale", "--replicas", "2"}, ""},
 		{vllm.New(), []string{"recommend-hardware", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","region":"us-east-1"}`},
-		{postgres.New(), []string{"offers", "base", "--cloud", "aws"}, ""},
-		{postgres.New(), []string{"offers", "base", "--memory-gib", "8"}, ""},
+		{postgres.New(), []string{"offers", "on-demand", "--cloud", "aws"}, ""},
+		{postgres.New(), []string{"offers", "on-demand", "--memory-gib", "8"}, ""},
 		{postgres.New(), []string{"offers", "scale", "--vcpu", "2"}, ""},
 		{postgres.New(), []string{"offers", "scale", "--location", "US"}, ""},
 		{postgres.New(), []string{"offers", "scale", "--storage-gib", "50"}, ""},
@@ -185,12 +188,12 @@ func TestPostgresOfferPriceInformation(t *testing.T) {
 		fmt.Fprint(w, `{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"deployment_options":[{"estimated_price_per_hour_usd":0.1727,"estimated_price_per_month_usd":126.07,"compute_price_per_hour_usd":0.15,"storage_price_per_month_usd":16.57,"source":"catalog","requested_vcpu":2}]}`)
 	}))
 	defer server.Close()
-	for _, tier := range []string{"base", "scale"} {
+	for _, tier := range []string{"on-demand", "scale"} {
 		for _, format := range []string{"table", "json"} {
 			t.Run(tier+"/"+format, func(t *testing.T) {
 				command := postgres.New().Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
 				args := []string{"offers", tier, "--storage-gib", "50", "-o", format}
-				if tier == "base" {
+				if tier == "on-demand" {
 					args = append(args, "--vcpu", "2", "--location", "US")
 				} else {
 					args = append(args, "--cloud", "aws", "--region", "us-east-1")

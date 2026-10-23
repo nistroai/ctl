@@ -53,7 +53,7 @@ func Print(w io.Writer, raw json.RawMessage, format string, options ...TableOpti
 		if deploymentList {
 			for _, item := range list {
 				row, ok := item.(map[string]any)
-				if !ok || row["tier"] != "base" {
+				if !ok || row["tier"] != "on-demand" {
 					continue
 				}
 				if location, exists := row["location"]; exists {
@@ -176,7 +176,7 @@ func redactDetails(value any, options ...TableOptions) any {
 	case map[string]any:
 		delete(v, "can_write")
 		delete(v, "nodes")
-		if DeploymentTier(v) == "base" {
+		if DeploymentTier(v) == "on-demand" {
 			delete(v, "enable_superuser")
 		}
 		if tier := DeploymentTier(v); tier != "" {
@@ -230,8 +230,8 @@ func hiddenTableColumn(key string, options ...TableOptions) bool {
 func DeploymentTier(v map[string]any) string {
 	mode, _ := v["pricing_mode"].(string)
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "basic", "base":
-		return "base"
+	case "basic", "base", "on-demand":
+		return "on-demand"
 	case "dedicated", "advanced", "scale":
 		return "scale"
 	case "enterprise":
@@ -240,7 +240,7 @@ func DeploymentTier(v map[string]any) string {
 	if strings.TrimSpace(mode) != "" {
 		return ""
 	}
-	// Postgres Base responses hide all placement fields, including when
+	// Postgres On-Demand responses hide all placement fields, including when
 	// pricing_mode is absent. Require Postgres capacity fields as well.
 	_, cpu := v["vcpu"]
 	_, memory := v["memory_gib"]
@@ -249,11 +249,11 @@ func DeploymentTier(v map[string]any) string {
 	_, region := v["region"]
 	_, instance := v["instance_type"]
 	if cpu && memory && storage && !cloud && !region && !instance {
-		return "base"
+		return "on-demand"
 	}
 	if dedicated, ok := v["dedicated"].(bool); ok {
 		if !dedicated {
-			return "base"
+			return "on-demand"
 		}
 		return "scale"
 	}

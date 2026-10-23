@@ -15,6 +15,41 @@ import (
 	"nistro-ctl/internal/products/vllm"
 )
 
+func TestOnDemandCommands(t *testing.T) {
+	for _, tc := range []struct {
+		prod   product.CLIProduct
+		groups []string
+	}{
+		{vllm.New(), []string{"create"}},
+		{postgres.New(), []string{"create", "update", "offers"}},
+	} {
+		for _, group := range tc.groups {
+			t.Run(tc.prod.Name()+"/"+group, func(t *testing.T) {
+				command := tc.prod.Command(product.Deps{})
+				found, _, err := command.Find([]string{group})
+				if err != nil || found.Name() != group {
+					t.Fatalf("missing command group %s: %v", group, err)
+				}
+				onDemand := false
+				for _, child := range found.Commands() {
+					if child.Name() == "base" || child.HasAlias("base") {
+						t.Fatal("command still exposes the old tier name")
+					}
+					if child.Name() == "on-demand" {
+						onDemand = true
+						if !strings.Contains(child.Short, "On-Demand") {
+							t.Fatalf("help is missing the tier label: %s", child.Short)
+						}
+					}
+				}
+				if !onDemand {
+					t.Fatal("missing on-demand subcommand")
+				}
+			})
+		}
+	}
+}
+
 func TestMutationsAndDiscovery(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
@@ -23,15 +58,15 @@ func TestMutationsAndDiscovery(t *testing.T) {
 		input, path, method string
 		want                map[string]any
 	}{
-		{"inference base", vllm.New(), []string{"create", "base", "--model-url", "org/model", "--max-model-len", "32768", "--location", "US"}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"pricing_mode": "basic", "max_replicas": float64(1)}},
+		{"inference on-demand", vllm.New(), []string{"create", "on-demand", "--model-url", "org/model", "--max-model-len", "32768", "--location", "US"}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"pricing_mode": "basic", "max_replicas": float64(1)}},
 		{"inference scale file override", vllm.New(), []string{"create", "scale", "--config-file", "-", "--replicas", "2"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":1}`, "/v1/vllm-kubeai/deployments", "POST", map[string]any{"min_replicas": float64(2), "max_replicas": float64(2)}},
 		{"inference update", vllm.New(), []string{"update", "scale", "dep-1", "--replicas", "3"}, "", "/v1/vllm-kubeai/deployments/dep-1", "PATCH", map[string]any{"min_replicas": float64(3), "max_replicas": float64(3)}},
-		{"postgres base", postgres.New(), []string{"create", "base", "--vcpu", "2", "--storage-gib", "50", "--location", "US"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "pricing_mode": "basic"}},
+		{"postgres on-demand", postgres.New(), []string{"create", "on-demand", "--vcpu", "2", "--storage-gib", "50", "--location", "US"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "pricing_mode": "basic"}},
 		{"postgres scale default standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--location", "US"}, "", "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
 		{"postgres scale config default standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"location":"US"}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
 		{"postgres scale config zero standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"location":"US","replicas":0}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(0)}},
 		{"postgres scale zero standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--location", "US", "--replicas", "0"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "vcpu": float64(2), "replicas": float64(0)}},
-		{"postgres base resize", postgres.New(), []string{"update", "base", "dep-1", "--vcpu", "0.5"}, "", "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"memory_gib": float64(2)}},
+		{"postgres on-demand resize", postgres.New(), []string{"update", "on-demand", "dep-1", "--vcpu", "0.5"}, "", "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"memory_gib": float64(2)}},
 		{"postgres parameters file", postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-", "--parameters", "work_mem=32MB", "--enable-superuser=false"}, `{"parameters":{"work_mem":"16MB"}}`, "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"enable_superuser": false}},
 		{"recommendation", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--location", "US"}, "", "/v1/recommendations", "POST", map[string]any{"context_length": float64(32768), "dedicated": true}},
 		{"postgres offers", postgres.New(), []string{"offers", "scale", "--storage-gib", "50", "--cloud", "aws", "--region", "us-east-1", "--replicas", "2"}, "", "/v1/postgres/offers", "POST", map[string]any{"vcpu": float64(1), "memory_gib": float64(1), "pricing_mode": "dedicated", "cloud": "aws", "region": "us-east-1", "replicas": float64(2)}},
@@ -42,7 +77,7 @@ func TestMutationsAndDiscovery(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/dep-1") {
 					mode := "dedicated"
-					if tc.name == "postgres base resize" {
+					if tc.name == "postgres on-demand resize" {
 						mode = "basic"
 					}
 					fmt.Fprintf(w, `{"id":"dep-1","pricing_mode":%q}`, mode)
@@ -107,13 +142,13 @@ func TestInvalidMutationInputsDoNotCallAPI(t *testing.T) {
 		args  []string
 		input string
 	}{
-		{vllm.New(), []string{"create", "base"}, ""},
+		{vllm.New(), []string{"create", "on-demand"}, ""},
 		{vllm.New(), []string{"create", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":0}`},
 		{postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-"}, `{"parameters":{"work_mem":42}}`},
-		{postgres.New(), []string{"create", "base", "--config-file", "-"}, `{"vcpu":"2","storage_gib":50,"location":"US"}`},
-		{postgres.New(), []string{"create", "base", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"US","unsupported":true}`},
-		{postgres.New(), []string{"create", "base", "--config-file", "-"}, `{} {}`},
-		{postgres.New(), []string{"update", "base", "dep-1"}, ""},
+		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":"2","storage_gib":50,"location":"US"}`},
+		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"US","unsupported":true}`},
+		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{} {}`},
+		{postgres.New(), []string{"update", "on-demand", "dep-1"}, ""},
 	} {
 		command := tc.prod.Command(product.Deps{Client: func() *api.Client { t.Fatal("invalid input called API"); return nil }})
 		command.SetIn(strings.NewReader(tc.input))

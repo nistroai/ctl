@@ -45,12 +45,12 @@ underscore keys (for example `model_url`); flags use hyphens (`--model-url`).
 Flags override file values. Use `--config-file -` to read JSON from stdin.
 
 ```bash
-nistro inference create base --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US
+nistro inference create on-demand --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US
 nistro inference create scale --config-file inference.json
 nistro inference update scale <id> --replicas 2
-nistro postgres create base --vcpu 2 --storage-gib 50 --location US
+nistro postgres create on-demand --vcpu 2 --storage-gib 50 --location US
 nistro postgres create scale --cloud aws --region us-east-1 --instance-type m7i.large --storage-gib 100 --location US --replicas 1
-nistro postgres update base <id> --vcpu 4 --storage-gib 100
+nistro postgres update on-demand <id> --vcpu 4 --storage-gib 100
 nistro postgres update scale <id> --replicas 2 --parameters work_mem=32MB
 ```
 
@@ -58,12 +58,12 @@ Required create inputs:
 
 | Product/tier | Required fields |
 | --- | --- |
-| Inference Base | `model_url`, `max_model_len`, `location` |
-| Inference Scale | Base fields plus `cloud`, `region`, `instance_type`, `replicas` (1–8) |
-| Postgres Base | `vcpu`, `storage_gib`, `location`; memory is calculated at 4 GiB per vCPU |
+| Inference On-Demand | `model_url`, `max_model_len`, `location` |
+| Inference Scale | On-Demand fields plus `cloud`, `region`, `instance_type`, `replicas` (1–8) |
+| Postgres On-Demand | `vcpu`, `storage_gib`, `location`; memory is calculated at 4 GiB per vCPU |
 | Postgres Scale | `storage_gib`, `location`, `cloud`, `region`, `instance_type`; `replicas` is optional (0–8 standbys, default 1); CPU/memory come from the matching offer |
 
-Inference supports Scale replica updates. Postgres Base supports CPU/storage
+Inference supports Scale replica updates. Postgres On-Demand supports CPU/storage
 updates; Scale supports storage, PostgreSQL version, replicas, superuser access,
 and parameters. Provide at least one update field. The CLI checks the deployment
 tier before updating; the server validates expansions and version upgrades.
@@ -73,7 +73,7 @@ Inspect model and placement options before selecting create/update inputs:
 ```bash
 nistro inference recommend-hardware scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US -o json
 nistro postgres placements scale
-nistro postgres offers base --vcpu 2 --storage-gib 50 --location US
+nistro postgres offers on-demand --vcpu 2 --storage-gib 50 --location US
 nistro postgres offers scale --storage-gib 100 --cloud aws --region us-east-1 --replicas 2 -o json
 ```
 
@@ -82,7 +82,7 @@ Discovery commands accept only the fields used by the website:
 | Command | Inputs |
 | --- | --- |
 | Inference recommend-hardware Scale | Model URL/ID, context length, location, optional quantization and GPU type |
-| Postgres offers Base | vCPU, storage, location; memory is calculated at 4 GiB per vCPU |
+| Postgres offers On-Demand | vCPU, storage, location; memory is calculated at 4 GiB per vCPU |
 | Postgres offers Scale | Required storage, cloud, and region; optional instance type and standby replicas (0–8, plus one primary); compute is resolved from placement |
 | Postgres placements Scale | No inputs; lists available clouds, regions, and instance types |
 

@@ -20,3 +20,14 @@ type CLIProduct interface {
 	Name() string
 	Command(Deps) *cobra.Command
 }
+
+func tierLabel(tier string) string {
+	switch tier {
+	case "on-demand":
+		return "On-Demand"
+	case "scale":
+		return "Scale"
+	default:
+		return tier
+	}
+}
