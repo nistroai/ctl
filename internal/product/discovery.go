@@ -18,11 +18,11 @@ func printPlacementRows(cmd *cobra.Command, rows []map[string]any) error {
 func discoveryFields(name, tier string) ([]inputField, []string) {
 	model := []inputField{{"model_url", "string", "Required Hugging Face model URL or ID"}, {"max_model_len", "int", "Required context length in tokens"}}
 	if name == "inference" {
-		return append(model, inputField{"quantization", "string", "Quantization (default Auto)"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"location", "string", "Required location: US, EU, or ASIA"}), []string{"model_url", "max_model_len", "location"}
+		return append(model, inputField{"quantization", "string", "Quantization (default Auto)"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"cloud", "string", "Required cloud provider"}, inputField{"region", "string", "Required cloud region"}), []string{"model_url", "max_model_len", "cloud", "region"}
 	}
 	fields := []inputField{{"storage_gib", "number", "Required storage size in GiB"}}
 	if tier == "on-demand" {
-		return append(fields, inputField{"vcpu", "int", "Required integer vCPUs from 1 to 8; memory is 4 GiB per vCPU"}, inputField{"location", "string", "Required location: US, EU, or ASIA"}), []string{"vcpu", "storage_gib", "location"}
+		return append(fields, inputField{"vcpu", "int", "Required integer vCPUs from 1 to 8; memory is 4 GiB per vCPU"}, inputField{"location", "string", "Required location: US, EU, ASIA, or ANY (cheapest eligible placement)"}), []string{"vcpu", "storage_gib", "location"}
 	}
 	return append(fields, inputField{"cloud", "string", "Required cloud provider"}, inputField{"region", "string", "Required cloud region"}, inputField{"instance_type", "string", "Instance type (omit for Any); determines compute capacity"}, inputField{"replicas", "int", "Standby replicas from 0 to 8 (plus one primary; default 1)"}), []string{"storage_gib", "cloud", "region"}
 }
@@ -88,7 +88,7 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 		group := &cobra.Command{Use: name, Short: "Show " + name + " before creating or updating deployments"}
 		tiers := []string{"on-demand", "scale"}
 		if parent.Name() == "inference" {
-			group.Short = "Recommend hardware before creating or updating Inference Scale deployments"
+			group.Short = "Recommend hardware before creating Inference Scale deployments"
 			tiers = []string{"scale"}
 		}
 		for _, tier := range tiers {
@@ -96,6 +96,10 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 			cmd := &cobra.Command{Use: tier, Short: "Show " + tierLabel(tier) + " " + name, Args: cobra.NoArgs}
 			if parent.Name() == "inference" {
 				cmd.Short = "Recommend hardware for a " + tierLabel(tier) + " inference deployment"
+			}
+			cmd.Long = cmd.Short + ". Provide settings with flags or --config-file. JSON keys use underscores; flags use hyphens. Flags override JSON values."
+			if tier == "scale" {
+				cmd.Long += " Cloud and region are required; the server derives location from them."
 			}
 			cmd.Flags().String("config-file", "", "JSON configuration file; use - to read from stdin")
 			for _, field := range fields {

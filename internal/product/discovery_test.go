@@ -71,7 +71,7 @@ func TestDiscoveryRejectsFieldsOutsideWebsiteForms(t *testing.T) {
 		{vllm.New(), []string{"quantizations", "--gpu-type", "H100"}, ""},
 		{vllm.New(), []string{"recommend-hardware", "scale", "--cloud", "aws"}, ""},
 		{vllm.New(), []string{"recommend-hardware", "scale", "--replicas", "2"}, ""},
-		{vllm.New(), []string{"recommend-hardware", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","region":"us-east-1"}`},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"region":"us-east-1"}`},
 		{postgres.New(), []string{"offers", "on-demand", "--cloud", "aws"}, ""},
 		{postgres.New(), []string{"offers", "on-demand", "--memory-gib", "8"}, ""},
 		{postgres.New(), []string{"offers", "scale", "--vcpu", "2"}, ""},
@@ -156,7 +156,7 @@ func TestInferenceHardwareRecommendations(t *testing.T) {
 				var out bytes.Buffer
 				command.SetOut(&out)
 				command.SetErr(&bytes.Buffer{})
-				command.SetArgs([]string{"recommend-hardware", tier, "--model-url", "org/model", "--max-model-len", "32768", "--location", "US", "-o", format})
+				command.SetArgs([]string{"recommend-hardware", tier, "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1", "-o", format})
 				if err := command.ExecuteContext(t.Context()); err != nil {
 					t.Fatal(err)
 				}
