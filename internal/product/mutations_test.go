@@ -59,16 +59,23 @@ func TestMutationsAndDiscovery(t *testing.T) {
 		want                map[string]any
 	}{
 		{"inference on-demand", vllm.New(), []string{"create", "on-demand", "--model-url", "org/model", "--max-model-len", "32768", "--location", "US"}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"pricing_mode": "basic", "max_replicas": float64(1)}},
-		{"inference scale file override", vllm.New(), []string{"create", "scale", "--config-file", "-", "--replicas", "2"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":1}`, "/v1/vllm-kubeai/deployments", "POST", map[string]any{"min_replicas": float64(2), "max_replicas": float64(2)}},
+		{"inference on-demand ANY", vllm.New(), []string{"create", "on-demand", "--model-url", "org/model", "--max-model-len", "32768", "--location", " any "}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"location": "ANY", "pricing_mode": "basic"}},
+		{"inference scale omitted location", vllm.New(), []string{"create", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1", "--instance-type", "gpu", "--replicas", "1"}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"location": nil, "region": "eu-north1", "pricing_mode": "dedicated"}},
+		{"inference scale GPU type", vllm.New(), []string{"create", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1", "--instance-type", "gpu", "--gpu-type", "H100-80GB", "--replicas", "1"}, "", "/v1/vllm-kubeai/deployments", "POST", map[string]any{"gpu_type": "H100-80GB", "pricing_mode": "dedicated"}},
+		{"inference scale file override", vllm.New(), []string{"create", "scale", "--config-file", "-", "--replicas", "2"}, `{"model_url":"org/model","max_model_len":32768,"cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":1}`, "/v1/vllm-kubeai/deployments", "POST", map[string]any{"min_replicas": float64(2), "max_replicas": float64(2)}},
 		{"inference update", vllm.New(), []string{"update", "scale", "dep-1", "--replicas", "3"}, "", "/v1/vllm-kubeai/deployments/dep-1", "PATCH", map[string]any{"min_replicas": float64(3), "max_replicas": float64(3)}},
 		{"postgres on-demand", postgres.New(), []string{"create", "on-demand", "--vcpu", "2", "--storage-gib", "50", "--location", "US"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "pricing_mode": "basic"}},
-		{"postgres scale default standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--location", "US"}, "", "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
-		{"postgres scale config default standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"location":"US"}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
-		{"postgres scale config zero standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"location":"US","replicas":0}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(0)}},
-		{"postgres scale zero standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--location", "US", "--replicas", "0"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "vcpu": float64(2), "replicas": float64(0)}},
+		{"postgres on-demand config ANY", postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":" Any "}`, "/v1/postgres/deployments", "POST", map[string]any{"location": "ANY", "pricing_mode": "basic"}},
+		{"postgres scale omitted location", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "eu-west-1", "--instance-type", "m7i.large", "--storage-gib", "50"}, "", "/v1/postgres/deployments", "POST", map[string]any{"location": nil, "region": "eu-west-1", "pricing_mode": "dedicated"}},
+		{"postgres scale default standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50"}, "", "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
+		{"postgres scale config default standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(1)}},
+		{"postgres scale config zero standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"replicas":0}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(0)}},
+		{"postgres scale zero standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--replicas", "0"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "vcpu": float64(2), "replicas": float64(0)}},
 		{"postgres on-demand resize", postgres.New(), []string{"update", "on-demand", "dep-1", "--vcpu", "0.5"}, "", "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"memory_gib": float64(2)}},
 		{"postgres parameters file", postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-", "--parameters", "work_mem=32MB", "--enable-superuser=false"}, `{"parameters":{"work_mem":"16MB"}}`, "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"enable_superuser": false}},
-		{"recommendation", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--location", "US"}, "", "/v1/recommendations", "POST", map[string]any{"context_length": float64(32768), "dedicated": true}},
+		{"recommendation", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1"}, "", "/v1/recommendations", "POST", map[string]any{"context_length": float64(32768), "dedicated": true}},
+		{"recommendation omitted location", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1"}, "", "/v1/recommendations", "POST", map[string]any{"location": nil, "cloud": "nebius", "region": "eu-north1", "dedicated": true}},
+		{"postgres offers ANY", postgres.New(), []string{"offers", "on-demand", "--vcpu", "2", "--storage-gib", "50", "--location", " any "}, "", "/v1/postgres/offers", "POST", map[string]any{"location": "ANY", "pricing_mode": "basic"}},
 		{"postgres offers", postgres.New(), []string{"offers", "scale", "--storage-gib", "50", "--cloud", "aws", "--region", "us-east-1", "--replicas", "2"}, "", "/v1/postgres/offers", "POST", map[string]any{"vcpu": float64(1), "memory_gib": float64(1), "pricing_mode": "dedicated", "cloud": "aws", "region": "us-east-1", "replicas": float64(2)}},
 		{"postgres offers zero standby", postgres.New(), []string{"offers", "scale", "--storage-gib", "50", "--cloud", "aws", "--region", "us-east-1", "--replicas", "0"}, "", "/v1/postgres/offers", "POST", map[string]any{"vcpu": float64(1), "memory_gib": float64(1), "pricing_mode": "dedicated", "cloud": "aws", "region": "us-east-1", "replicas": float64(0)}},
 	} {
@@ -84,7 +91,14 @@ func TestMutationsAndDiscovery(t *testing.T) {
 					return
 				}
 				if strings.HasPrefix(tc.name, "postgres scale ") && r.URL.Path == "/v1/postgres/offers" {
-					fmt.Fprint(w, `{"deployment_options":[{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","vcpu":2,"ram_gib":8}]}`)
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if expected, ok := tc.want["location"]; ok && body["location"] != expected {
+						t.Errorf("offer location: got %v, want %v", body["location"], expected)
+					}
+					json.NewEncoder(w).Encode(map[string]any{"deployment_options": []any{map[string]any{"cloud": body["cloud"], "region": body["region"], "instance_type": body["instance_type"], "vcpu": 2, "ram_gib": 8}}})
 					return
 				}
 				calls++
@@ -143,7 +157,26 @@ func TestInvalidMutationInputsDoNotCallAPI(t *testing.T) {
 		input string
 	}{
 		{vllm.New(), []string{"create", "on-demand"}, ""},
-		{vllm.New(), []string{"create", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":0}`},
+		{vllm.New(), []string{"create", "on-demand", "--gpu-type", "H100"}, ""},
+		{vllm.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"ANY","gpu_type":"Any"}`},
+		{vllm.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","gpu_type":"H100"}`},
+		{vllm.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"ANY","instance_type":"gpu"}`},
+		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"ANY","instance_type":"t4g.2xlarge"}`},
+		{postgres.New(), []string{"offers", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"US","instance_type":"t4g.2xlarge"}`},
+		{vllm.New(), []string{"create", "scale", "--location", "US"}, ""},
+		{postgres.New(), []string{"create", "scale", "--location", "EU"}, ""},
+		{vllm.New(), []string{"create", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"","cloud":"nebius","region":"eu-north1","instance_type":"gpu","replicas":1}`},
+		{postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"storage_gib":50,"location":"US","cloud":"aws","region":"us-east-1","instance_type":"m7i.large"}`},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":"US","cloud":"nebius","region":"eu-north1"}`},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius"}, ""},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--region", "eu-north1"}, ""},
+		{vllm.New(), []string{"create", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"location":" any ","cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":1}`},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768"}, ""},
+		{vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--location", "ANY"}, ""},
+		{postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"storage_gib":50,"location":"ANY","cloud":"aws","region":"us-east-1","instance_type":"m7i.large"}`},
+		{postgres.New(), []string{"offers", "on-demand", "--vcpu", "2", "--storage-gib", "50", "--location", ""}, ""},
+		{postgres.New(), []string{"offers", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"ANY","cloud":"aws"}`},
+		{vllm.New(), []string{"create", "scale", "--config-file", "-"}, `{"model_url":"org/model","max_model_len":32768,"cloud":"aws","region":"us-east-1","instance_type":"gpu","replicas":0}`},
 		{postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-"}, `{"parameters":{"work_mem":42}}`},
 		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":"2","storage_gib":50,"location":"US"}`},
 		{postgres.New(), []string{"create", "on-demand", "--config-file", "-"}, `{"vcpu":2,"storage_gib":50,"location":"US","unsupported":true}`},

@@ -23,6 +23,9 @@ func TestOutput(t *testing.T) {
 		{`{"pricing_mode":"basic","enable_superuser":false}`, "table", "ON-DEMAND", "enable_superuser"},
 		{`{"pricing_mode":"dedicated","enable_superuser":true}`, "table", "ENABLE_SUPERUSER", ""},
 		{`{"name":"malicious\u001b[31m\nvalue"}`, "table", "malicious", "\x1b"},
+		{`{"deployments":[{"id":"dep-any","pricing_mode":"basic","location":"Nistro Managed","vcpu":2,"memory_gib":8,"storage_gib":50}]}`, "table", "Nistro Managed", ""},
+		{`{"deployment":{"id":"dep-any","dedicated":false,"location":"Nistro Managed"}}`, "table", "Nistro Managed", ""},
+		{`{"location":"Nistro Managed","estimated_price_per_hour_usd":0}`, "json", `"estimated_price_per_hour_usd": 0`, ""},
 	} {
 		var b bytes.Buffer
 		if err := Print(&b, []byte(tc.raw), tc.format); err != nil {
