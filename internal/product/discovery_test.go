@@ -125,9 +125,6 @@ func TestInferenceHardwareRecommendationCommands(t *testing.T) {
 	command := vllm.New().Command(product.Deps{})
 	found := false
 	for _, child := range command.Commands() {
-		if child.Name() == "offers" || child.HasAlias("offers") {
-			t.Fatal("inference still exposes offers")
-		}
 		if child.Name() == "recommend-hardware" {
 			found = true
 			tiers := child.Commands()
@@ -142,44 +139,107 @@ func TestInferenceHardwareRecommendationCommands(t *testing.T) {
 }
 
 func TestInferenceHardwareRecommendations(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/v1/recommendations" {
-			t.Errorf("unexpected recommendation request: %s %s", r.Method, r.URL.Path)
-		}
-		fmt.Fprint(w, `{"deployment_options":[{"gpu":"A100","actual_vram_gb":80,"gpu_vram_gb":40,"price_per_hour_usd":0.1727}]}`)
-	}))
-	defer server.Close()
-	for _, tier := range []string{"scale"} {
+	for _, model := range []string{"org/model", "https://huggingface.co/org/model"} {
 		for _, format := range []string{"table", "json"} {
-			t.Run(tier+"/"+format, func(t *testing.T) {
+			t.Run(model+"/"+format, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "POST" || r.URL.Path != "/v1/vllm/hardware-recommendations" {
+						t.Errorf("unexpected recommendation request: %s %s", r.Method, r.URL.Path)
+					}
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					key := "model"
+					if strings.HasPrefix(model, "https://") {
+						key = "url"
+					}
+					if body[key] != model || body["context_length"] != float64(32768) || body["pricing_mode"] != "dedicated" || body["dedicated"] != true || body["location"] != "US" || body["cloud"] != nil || body["region"] != nil {
+						t.Errorf("unexpected recommendation body: %v", body)
+					}
+					if _, exists := body["model_url"]; exists {
+						t.Error("model_url must be translated for the API")
+					}
+					if _, exists := body["max_model_len"]; exists {
+						t.Error("max_model_len must be translated for the API")
+					}
+					fmt.Fprint(w, `{"model_id":"org/model","deployment_options":[{"cloud":"nebius","region":"eu-north1","sku":"gpu-h100-sxm","gpu_type":"H100-80GB"}],"quantization_options":[{"name":"fp16","selected":true}]}`)
+				}))
+				defer server.Close()
 				command := vllm.New().Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
-				var out bytes.Buffer
+				var out, progress bytes.Buffer
 				command.SetOut(&out)
-				command.SetErr(&bytes.Buffer{})
-				command.SetArgs([]string{"recommend-hardware", tier, "--model-url", "org/model", "--max-model-len", "32768", "--cloud", "nebius", "--region", "eu-north1", "-o", format})
+				command.SetErr(&progress)
+				command.SetArgs([]string{"recommend-hardware", "scale", "--model-url", model, "--max-model-len", "32768", "--location", "us", "-o", format})
 				if err := command.ExecuteContext(t.Context()); err != nil {
 					t.Fatal(err)
 				}
 				if format == "json" {
-					if !strings.Contains(out.String(), `"actual_vram_gb": 80`) || !strings.Contains(out.String(), `"gpu_vram_gb": 40`) || !strings.Contains(out.String(), `"price_per_hour_usd": 0.1727`) {
-						t.Fatal("JSON response fields changed")
+					var response map[string]any
+					if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+						t.Fatal(err)
+					}
+					options := response["deployment_options"].([]any)
+					row := options[0].(map[string]any)
+					if row["sku"] != "gpu-h100-sxm" || row["gpu_type"] != "H100-80GB" || len(row) != 4 || response["model_id"] != "org/model" || response["quantization_options"] == nil || progress.Len() != 0 {
+						t.Fatalf("JSON response fields or progress changed: %s", out.String())
 					}
 					return
 				}
 				lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-				headers, cells := strings.Fields(lines[0]), strings.Fields(lines[1])
-				if strings.Contains(out.String(), "PRICE") || strings.Contains(out.String(), "0.1727") {
-					t.Fatalf("recommendation table includes price information: %s", out.String())
+				if len(lines) != 2 || strings.Join(strings.Fields(lines[0]), ",") != "CLOUD,REGION,INSTANCE_TYPE,GPU_TYPE" || strings.Join(strings.Fields(lines[1]), ",") != "nebius,eu-north1,gpu-h100-sxm,H100-80GB" {
+					t.Fatalf("unexpected hardware table: %s", out.String())
 				}
-				want := "80"
-				for i, header := range headers {
-					if header == "GPU_VRAM_GB" && cells[i] == want {
-						return
-					}
-				}
-				t.Fatalf("GPU_VRAM_GB should be %s: %s", want, out.String())
 			})
 		}
+	}
+}
+
+func TestInferenceHardwareRecommendationPlacement(t *testing.T) {
+	model := "https://huggingface.co/Qwen/Qwen2.5-0.5B"
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		input    string
+		location string
+	}{
+		{"location flag", []string{"--location", "us"}, "", "US"},
+		{"location config", []string{"--config-file", "-"}, `{"location":" eu "}`, "EU"},
+		{"location Asia", []string{"--location", "asia"}, "", "ASIA"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != "POST" || r.URL.Path != "/v1/vllm/hardware-recommendations" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["url"] != model || body["context_length"] != float64(32000) || body["pricing_mode"] != "dedicated" || body["dedicated"] != true {
+					t.Errorf("unexpected recommendation input: %v", body)
+				}
+				if body["location"] != tc.location || body["cloud"] != nil || body["region"] != nil {
+					t.Errorf("expected location %q without cloud or region: %v", tc.location, body)
+				}
+				fmt.Fprint(w, `{"deployment_options":[]}`)
+			}))
+			defer server.Close()
+			command := vllm.New().Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
+			args := []string{"recommend-hardware", "scale", "--model-url", model, "--max-model-len", "32000", "-o", "json"}
+			command.SetArgs(append(args, tc.args...))
+			command.SetIn(strings.NewReader(tc.input))
+			command.SetOut(&bytes.Buffer{})
+			command.SetErr(&bytes.Buffer{})
+			if err := command.ExecuteContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("expected one recommendation request, got %d", calls)
+			}
+		})
 	}
 }
 

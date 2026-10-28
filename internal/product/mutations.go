@@ -379,6 +379,9 @@ func validateMutation(body map[string]any, product, tier, action string) error {
 		if location != "US" && location != "EU" && location != "ASIA" && location != "ANY" {
 			return fmt.Errorf("location must be US, EU, ASIA, or ANY")
 		}
+		if tier == "scale" && location == "ANY" {
+			return fmt.Errorf("location ANY is available on the On-Demand tier only")
+		}
 		body["location"] = location
 	}
 	for key, value := range body {
@@ -392,7 +395,7 @@ func validateMutation(body map[string]any, product, tier, action string) error {
 		}
 	}
 	if product == "inference" {
-		if value, ok := body["replicas"]; ok {
+		if value, ok := body["replicas"]; ok && action != "discovery" {
 			body["min_replicas"], body["max_replicas"] = value, value
 			delete(body, "replicas")
 		}
