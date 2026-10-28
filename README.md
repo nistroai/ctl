@@ -68,8 +68,10 @@ On-Demand (the API's Base tier) requires `location`: `US`, `EU`, `ASIA`, or
 are case-insensitive and trimmed. On-Demand accepts location only for placement,
 without cloud, region, or instance type. On-Demand inference also does not accept
 GPU type; the server selects hardware automatically. Deployments placed with
-`ANY` report `Nistro Managed` as their location. Scale commands require cloud and region and do not accept
-location in flags or JSON configuration; the server derives it from placement.
+`ANY` report `Nistro Managed` as their location. Scale create and Postgres offers commands
+require cloud and region and do not accept location in flags or JSON configuration;
+the server derives it from placement. Inference hardware recommendations require
+location and do not accept cloud or region; Scale does not accept `ANY`.
 
 Inference supports Scale replica updates. Postgres On-Demand supports CPU/storage
 updates; Scale supports storage, PostgreSQL version, replicas, superuser access,
@@ -79,7 +81,9 @@ tier before updating; the server validates expansions and version upgrades.
 Inspect model and placement options before selecting create/update inputs:
 
 ```bash
-nistro inference recommend-hardware scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --cloud nebius --region eu-north1 -o json
+nistro inference recommend-hardware scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location US -o json
+nistro inference offers on-demand --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --location ANY
+nistro inference offers scale --model-url Qwen/Qwen2.5-7B-Instruct --max-model-len 32768 --cloud aws --region us-east-1 --instance-type g5.xlarge --replicas 2 -o json
 nistro postgres placements scale
 nistro postgres offers on-demand --vcpu 2 --storage-gib 50 --location ANY
 nistro postgres offers scale --storage-gib 100 --cloud aws --region us-east-1 --replicas 2 -o json
@@ -89,16 +93,20 @@ Discovery command inputs:
 
 | Command | Inputs |
 | --- | --- |
-| Inference recommend-hardware Scale | Required model URL/ID, context length, cloud, and region; optional quantization and GPU type |
+| Inference recommend-hardware Scale | Required model URL/ID, context length, and location (US, EU, or ASIA); optional quantization and GPU type |
+| Inference offers On-Demand | Required model URL/ID, context length, and location (US, EU, ASIA, or ANY); optional quantization; hardware is selected automatically |
+| Inference offers Scale | Required model URL/ID, context length, cloud, region, and instance type; optional quantization, GPU type, and replicas (1–8, default 1) |
 | Postgres offers On-Demand | vCPU, storage, location; memory is calculated at 4 GiB per vCPU |
 | Postgres offers Scale | Required storage, cloud, and region; optional instance type and standby replicas (0–8, plus one primary); compute is resolved from placement |
 | Postgres placements Scale | No inputs; lists available clouds, regions, and instance types |
 
-Inference hardware recommendations and Postgres offers also accept `--config-file`.
+All inference discovery commands and Postgres offers accept `--config-file`.
 Inference hardware recommendations are available for Scale.
-Recommendation tables show GPU, required VRAM, actual GPU VRAM, tensor parallel
-size, GPU memory utilization, cloud, region, and instance
-type. `postgres offers scale` tables show `estimated_price_per_hour_usd`.
+Recommendation tables show cloud, region, instance type (the API's `sku`), and
+GPU type. `postgres offers scale` tables show `estimated_price_per_hour_usd`.
+Inference offer tables show `price_per_hour_usd`; Scale quotes cover all requested
+replicas (`--replicas` maps to the API's `node_count`). Use a hardware recommendation's
+`sku` as `--instance-type` when quoting Scale pricing.
 Other CLI tables and hardware selectors omit price information.
 Postgres offer tables also omit source; Scale also omits requested CPU and memory.
 Postgres offers and create/update responses omit `estimated_price_per_month_usd`
@@ -106,7 +114,8 @@ in JSON output.
 
 JSON output preserves other API fields and contains no progress messages.
 Placements uses `/v1/postgres/scale/catalog`. Inference placement choices come
-from hardware recommendations; there is no separate inference placement API.
+from `/v1/vllm/hardware-recommendations`; there is no separate inference placement API.
+Inference offers use `/v1/vllm/price-estimates` for both On-Demand and Scale.
 
 Useful commands:
 

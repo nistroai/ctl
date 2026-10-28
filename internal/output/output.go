@@ -216,7 +216,7 @@ func redactDetails(value any, options ...TableOptions) any {
 
 func hiddenTableColumn(key string, options ...TableOptions) bool {
 	key = strings.ToLower(key)
-	if key == "estimated_price_per_hour_usd" && len(options) > 0 && options[0].ShowHourlyPrice {
+	if (key == "estimated_price_per_hour_usd" || key == "price_per_hour_usd") && len(options) > 0 && options[0].ShowHourlyPrice {
 		return false
 	}
 	switch key {

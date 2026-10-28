@@ -15,10 +15,18 @@ func printPlacementRows(cmd *cobra.Command, rows []map[string]any) error {
 	return output.Table(cmd.OutOrStdout(), rows, []string{"cloud", "region", "location", "instance_type"})
 }
 
-func discoveryFields(name, tier string) ([]inputField, []string) {
+func discoveryFields(name, tier, command string) ([]inputField, []string) {
 	model := []inputField{{"model_url", "string", "Required Hugging Face model URL or ID"}, {"max_model_len", "int", "Required context length in tokens"}}
 	if name == "inference" {
-		return append(model, inputField{"quantization", "string", "Quantization (default Auto)"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"cloud", "string", "Required cloud provider"}, inputField{"region", "string", "Required cloud region"}), []string{"model_url", "max_model_len", "cloud", "region"}
+		if command == "offers" {
+			fields := append(model, inputField{"quantization", "string", "Quantization (default Auto)"})
+			required := []string{"model_url", "max_model_len"}
+			if tier == "on-demand" {
+				return append(fields, inputField{"location", "string", "Required location: US, EU, ASIA, or ANY (cheapest eligible placement)"}), append(required, "location")
+			}
+			return append(fields, inputField{"cloud", "string", "Required cloud provider"}, inputField{"region", "string", "Required cloud region"}, inputField{"instance_type", "string", "Required instance type; use the hardware recommendation's sku"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"replicas", "int", "Fixed replica count from 1 to 8 (default 1); price covers all replicas"}), append(required, "cloud", "region", "instance_type")
+		}
+		return append(model, inputField{"quantization", "string", "Quantization (default Auto)"}, inputField{"gpu_type", "string", "GPU type (default Any)"}, inputField{"location", "string", "Required location: US, EU, or ASIA"}), []string{"model_url", "max_model_len", "location"}
 	}
 	fields := []inputField{{"storage_gib", "number", "Required storage size in GiB"}}
 	if tier == "on-demand" {
@@ -82,23 +90,25 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 	}
 	names := []string{"offers"}
 	if parent.Name() == "inference" {
-		names = []string{"recommend-hardware"}
+		names = []string{"recommend-hardware", "offers"}
 	}
 	for _, name := range names {
 		group := &cobra.Command{Use: name, Short: "Show " + name + " before creating or updating deployments"}
 		tiers := []string{"on-demand", "scale"}
-		if parent.Name() == "inference" {
+		if name == "recommend-hardware" {
 			group.Short = "Recommend hardware before creating Inference Scale deployments"
 			tiers = []string{"scale"}
 		}
 		for _, tier := range tiers {
-			fields, required := discoveryFields(parent.Name(), tier)
+			fields, required := discoveryFields(parent.Name(), tier, name)
 			cmd := &cobra.Command{Use: tier, Short: "Show " + tierLabel(tier) + " " + name, Args: cobra.NoArgs}
-			if parent.Name() == "inference" {
+			if name == "recommend-hardware" {
 				cmd.Short = "Recommend hardware for a " + tierLabel(tier) + " inference deployment"
 			}
 			cmd.Long = cmd.Short + ". Provide settings with flags or --config-file. JSON keys use underscores; flags use hyphens. Flags override JSON values."
-			if tier == "scale" {
+			if name == "recommend-hardware" {
+				cmd.Long += " Location is required: US, EU, or ASIA. Location ANY is not available for Scale."
+			} else if tier == "scale" {
 				cmd.Long += " Cloud and region are required; the server derives location from them."
 			}
 			cmd.Flags().String("config-file", "", "JSON configuration file; use - to read from stdin")
@@ -158,14 +168,24 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 					body[key], body["context_length"] = model, body["max_model_len"]
 					delete(body, "model_url")
 					delete(body, "max_model_len")
-					path = "/v1/recommendations"
+					path = "/v1/vllm/hardware-recommendations"
+					if name == "offers" {
+						path = "/v1/vllm/price-estimates"
+						if tier == "scale" {
+							body["node_count"] = 1
+							if replicas, ok := body["replicas"]; ok {
+								body["node_count"] = replicas
+								delete(body, "replicas")
+							}
+						}
+					}
 					body["dedicated"] = tier == "scale"
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 				defer cancel()
 				var progress *progressLine
 				progressName := "offers"
-				if parent.Name() == "inference" {
+				if name == "recommend-hardware" {
 					progressName = "hardware recommendations"
 				}
 				if format != "json" {
@@ -192,12 +212,15 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				if err := json.Unmarshal(raw, &data); err != nil {
 					return err
 				}
-				tableOptions := output.TableOptions{ShowHourlyPrice: parent.Name() == "postgres" && tier == "scale"}
-				removeOfferPriceFields(data, tableOptions.ShowHourlyPrice)
 				options, _ := data["deployment_options"].([]any)
 				if parent.Name() == "inference" {
-					return printRecommendationsTable(cmd, options, tier)
+					if name == "recommend-hardware" {
+						return printRecommendationsTable(cmd, options)
+					}
+					return printInferenceOffersTable(cmd, options, tier)
 				}
+				tableOptions := output.TableOptions{ShowHourlyPrice: parent.Name() == "postgres" && tier == "scale"}
+				removeOfferPriceFields(data, tableOptions.ShowHourlyPrice)
 				delete(data, "deployment_options")
 				if parent.Name() == "postgres" {
 					for _, offer := range options {
@@ -284,27 +307,31 @@ func printOffersTable(cmd *cobra.Command, offers []any, options output.TableOpti
 	return output.Table(cmd.OutOrStdout(), rows, nil, options)
 }
 
-func printRecommendationsTable(cmd *cobra.Command, offers []any, tier string) error {
-	columns := []string{"gpu", "required_vram_gb", "gpu_vram_gb", "tensor_parallel_size", "gpu_memory_utilization"}
-	if tier == "scale" {
-		columns = append(columns, "cloud", "region", "instance_type")
-	}
+func printRecommendationsTable(cmd *cobra.Command, offers []any) error {
+	columns := []string{"cloud", "region", "instance_type", "gpu_type"}
 	rows := make([]map[string]any, 0, len(offers))
 	for _, offer := range offers {
 		if row, ok := offer.(map[string]any); ok {
-			row["gpu_vram_gb"] = row["actual_vram_gb"]
-			if gpu, ok := row["gpu"].(string); !ok || gpu == "" {
-				if value, ok := row["gpu_type"]; ok {
-					row["gpu"] = value
-				}
-			}
-			if instance, ok := row["instance_type"].(string); !ok || instance == "" {
-				if value, ok := row["sku"]; ok {
-					row["instance_type"] = value
-				}
-			}
+			row["instance_type"] = row["sku"]
 			rows = append(rows, row)
 		}
 	}
 	return output.Table(cmd.OutOrStdout(), rows, columns)
+}
+
+func printInferenceOffersTable(cmd *cobra.Command, offers []any, tier string) error {
+	columns := []string{"gpu_type", "required_vram_gb", "actual_vram_gb", "tensor_parallel_size", "gpu_memory_utilization", "price_per_hour_usd"}
+	if tier == "scale" {
+		columns = append([]string{"cloud", "region", "instance_type", "node_count"}, columns...)
+	}
+	rows := make([]map[string]any, 0, len(offers))
+	for _, offer := range offers {
+		if row, ok := offer.(map[string]any); ok {
+			if tier == "scale" {
+				row["instance_type"] = row["sku"]
+			}
+			rows = append(rows, row)
+		}
+	}
+	return output.Table(cmd.OutOrStdout(), rows, columns, output.TableOptions{ShowHourlyPrice: true})
 }
