@@ -28,10 +28,16 @@ curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -
 Pull requests and merge-queue checks targeting `main` run `go test ./...` and
 build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
 
-Merges to `main` automatically create the next semantic-version tag and publish
-archives for Linux, macOS, and Windows on AMD64 and ARM64. The default version
-bump is a patch; include `#minor` or `#major` in the merge commit message for a
-larger bump. A manually pushed `v*` tag also publishes a release:
+Releases are explicit and serialized. To publish a version from the current
+`main` commit, run the Release workflow with a semantic version:
+
+```bash
+gh workflow run Release --repo nistroai/ctl --ref main -f version=v0.1.0
+```
+
+The workflow tests and builds the selected commit before creating its tag and
+publishing archives for Linux, macOS, and Windows on AMD64 and ARM64. A
+manually pushed `v*` tag also publishes a release:
 
 ```bash
 git tag v0.1.0
