@@ -74,7 +74,7 @@ the server derives it from placement. Inference hardware recommendations require
 location and do not accept cloud or region; Scale does not accept `ANY`.
 
 Inference supports Scale replica updates. Postgres On-Demand supports CPU/storage
-updates; Scale supports storage, PostgreSQL version, replicas, superuser access,
+updates; Scale supports storage, PostgreSQL version, replicas,
 and parameters. Provide at least one update field. The CLI checks the deployment
 tier before updating; the server validates expansions and version upgrades.
 

@@ -26,7 +26,7 @@ func mutationFields(product, tier, action string) ([]inputField, []string) {
 		if tier == "on-demand" {
 			return append(fields, inputField{"vcpu", "number", "New vCPUs; memory is calculated at 4 GiB per vCPU"}), nil
 		}
-		return append(fields, inputField{"postgres_version", "string", "New PostgreSQL major version; upgrade only"}, inputField{"replicas", "int", "Standby replicas from 0 to 8"}, inputField{"enable_superuser", "bool", "Enable superuser access"}, inputField{"parameters", "map", "PostgreSQL parameter name=value (repeatable; replaces the parameter set)"}), nil
+		return append(fields, inputField{"postgres_version", "string", "New PostgreSQL major version; upgrade only"}, inputField{"replicas", "int", "Standby replicas from 0 to 8"}, inputField{"parameters", "map", "PostgreSQL parameter name=value (repeatable; replaces the parameter set)"}), nil
 	}
 	var fields []inputField
 	var required []string
@@ -41,7 +41,7 @@ func mutationFields(product, tier, action string) ([]inputField, []string) {
 			fields = append(fields, inputField{"vcpu", "number", "Required vCPUs from 1 to 8; memory is 4 GiB per vCPU"})
 			required = append(required, "vcpu")
 		} else {
-			fields = append(fields, inputField{"replicas", "int", "Standby replicas from 0 to 8 (default 1)"}, inputField{"enable_superuser", "bool", "Enable superuser access (default false)"}, inputField{"parameters", "map", "PostgreSQL parameter name=value (repeatable)"}, inputField{"extensions", "array", "Extensions (comma-separated)"})
+			fields = append(fields, inputField{"replicas", "int", "Standby replicas from 0 to 8 (default 1)"}, inputField{"parameters", "map", "PostgreSQL parameter name=value (repeatable)"}, inputField{"extensions", "array", "Extensions (comma-separated)"})
 		}
 	} else {
 		fields = append(fields, inputField{"model_url", "string", "Required Hugging Face model URL or ID"}, inputField{"max_model_len", "int", "Required context length in tokens"}, inputField{"quantization", "string", "Quantization (default Auto)"})
@@ -207,7 +207,7 @@ func AddMutations(parent *cobra.Command, deps Deps, path string) {
 						return err
 					}
 				}
-				return output.Print(cmd.OutOrStdout(), raw, format)
+				return output.Print(cmd.OutOrStdout(), raw, format, output.TableOptions{HideUpdatedAt: action == "create"})
 			}
 			group.AddCommand(cmd)
 		}
