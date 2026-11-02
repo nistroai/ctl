@@ -12,6 +12,7 @@ import (
 // TableOptions controls optional fields in table output.
 type TableOptions struct {
 	ShowHourlyPrice bool
+	HideUpdatedAt   bool
 }
 
 // JSON preserves the entire API response. Tables favor stable summary fields.
@@ -216,6 +217,9 @@ func redactDetails(value any, options ...TableOptions) any {
 
 func hiddenTableColumn(key string, options ...TableOptions) bool {
 	key = strings.ToLower(key)
+	if key == "updated_at" && len(options) > 0 && options[0].HideUpdatedAt {
+		return true
+	}
 	if (key == "estimated_price_per_hour_usd" || key == "price_per_hour_usd") && len(options) > 0 && options[0].ShowHourlyPrice {
 		return false
 	}

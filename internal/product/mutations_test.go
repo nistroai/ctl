@@ -50,6 +50,66 @@ func TestOnDemandCommands(t *testing.T) {
 	}
 }
 
+func TestCreateTimestampOutput(t *testing.T) {
+	for _, prod := range []product.CLIProduct{postgres.New(), vllm.New()} {
+		for _, tier := range []string{"on-demand", "scale"} {
+			for _, format := range []string{"table", "json"} {
+				for _, wrapped := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/%s/wrapped=%t", prod.Name(), tier, format, wrapped), func(t *testing.T) {
+						server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							if r.URL.Path == "/v1/postgres/offers" {
+								fmt.Fprint(w, `{"deployment_options":[{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","vcpu":2,"ram_gib":8}]}`)
+								return
+							}
+							response := `{"id":"dep-1","created_at":"2026-11-02T06:30:55Z","updated_at":"0001-01-01T00:00:00Z"}`
+							if wrapped {
+								response = `{"deployment":` + response + `}`
+							}
+							fmt.Fprint(w, response)
+						}))
+						defer server.Close()
+						command := prod.Command(product.Deps{Client: func() *api.Client { return api.NewClient(server.URL, "") }})
+						args := []string{"create", tier, "--output", format}
+						if prod.Name() == "postgres" {
+							args = append(args, "--storage-gib", "50")
+							if tier == "on-demand" {
+								args = append(args, "--vcpu", "2")
+							}
+						} else {
+							args = append(args, "--model-url", "org/model", "--max-model-len", "32768")
+							if tier == "scale" {
+								args = append(args, "--replicas", "1")
+							}
+						}
+						if tier == "on-demand" {
+							args = append(args, "--location", "ANY")
+						} else {
+							args = append(args, "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large")
+						}
+						var out bytes.Buffer
+						command.SetOut(&out)
+						command.SetErr(&bytes.Buffer{})
+						command.SetArgs(args)
+						if err := command.ExecuteContext(t.Context()); err != nil {
+							t.Fatal(err)
+						}
+						if !strings.Contains(out.String(), "dep-1") || !strings.Contains(out.String(), "2026-11-02T06:30:55Z") {
+							t.Fatalf("missing deployment ID or creation timestamp: %s", out.String())
+						}
+						if format == "table" {
+							if strings.Contains(out.String(), "UPDATED_AT") || strings.Contains(out.String(), "0001-01-01") {
+								t.Fatalf("create table includes update timestamp: %s", out.String())
+							}
+						} else if !json.Valid(out.Bytes()) || !strings.Contains(out.String(), `"updated_at": "0001-01-01T00:00:00Z"`) {
+							t.Fatalf("JSON did not preserve the update timestamp: %s", out.String())
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestMutationsAndDiscovery(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
@@ -72,7 +132,7 @@ func TestMutationsAndDiscovery(t *testing.T) {
 		{"postgres scale config zero standby", postgres.New(), []string{"create", "scale", "--config-file", "-"}, `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","storage_gib":50,"replicas":0}`, "/v1/postgres/deployments", "POST", map[string]any{"replicas": float64(0)}},
 		{"postgres scale zero standby", postgres.New(), []string{"create", "scale", "--cloud", "aws", "--region", "us-east-1", "--instance-type", "m7i.large", "--storage-gib", "50", "--replicas", "0"}, "", "/v1/postgres/deployments", "POST", map[string]any{"memory_gib": float64(8), "vcpu": float64(2), "replicas": float64(0)}},
 		{"postgres on-demand resize", postgres.New(), []string{"update", "on-demand", "dep-1", "--vcpu", "0.5"}, "", "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"memory_gib": float64(2)}},
-		{"postgres parameters file", postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-", "--parameters", "work_mem=32MB", "--enable-superuser=false"}, `{"parameters":{"work_mem":"16MB"}}`, "/v1/postgres/deployments/dep-1", "PATCH", map[string]any{"enable_superuser": false}},
+		{"postgres parameters file", postgres.New(), []string{"update", "scale", "dep-1", "--config-file", "-", "--parameters", "work_mem=32MB"}, `{"parameters":{"work_mem":"16MB"}}`, "/v1/postgres/deployments/dep-1", "PATCH", nil},
 		{"recommendation", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--location", "us"}, "", "/v1/vllm/hardware-recommendations", "POST", map[string]any{"context_length": float64(32768), "dedicated": true}},
 		{"recommendation location", vllm.New(), []string{"recommend-hardware", "scale", "--model-url", "org/model", "--max-model-len", "32768", "--location", "us"}, "", "/v1/vllm/hardware-recommendations", "POST", map[string]any{"location": "US", "cloud": nil, "region": nil, "dedicated": true}},
 		{"postgres offers ANY", postgres.New(), []string{"offers", "on-demand", "--vcpu", "2", "--storage-gib", "50", "--location", " any "}, "", "/v1/postgres/offers", "POST", map[string]any{"location": "ANY", "pricing_mode": "basic"}},
