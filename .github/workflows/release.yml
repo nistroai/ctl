@@ -1,48 +1,44 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: [Build]
-    types: [completed]
-    branches: [main]
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  group: release-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
   prepare:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.release.outputs.ref }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Resolve release commit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+      - name: Resolve release version and commit
         id: release
         shell: bash
         env:
-          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          VERSION: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
-          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
-            release_ref="$WORKFLOW_RUN_SHA"
-          else
-            release_ref="$GITHUB_SHA"
-          fi
-
-          if [[ ! "$release_ref" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Invalid release commit: $release_ref" >&2
+          version_regex='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$VERSION" =~ $version_regex ]]; then
+            echo "Invalid release version: $VERSION" >&2
             exit 1
           fi
 
+          release_ref=$(git rev-parse "refs/tags/$VERSION^{commit}")
           echo "ref=$release_ref" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   test:
     needs: prepare
@@ -57,33 +53,8 @@ jobs:
           cache-dependency-path: go.sum
       - run: go test ./...
 
-  version:
-    needs: [prepare, test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.tag.outputs.new_tag || steps.existing_tag.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.ref }}
-      - name: Create semantic version tag
-        id: tag
-        if: github.event_name == 'workflow_run'
-        uses: mathieudutour/github-tag-action@af99e60ce8132224b8e6ebab5023449fe256ed46 # v7.0.0
-        with:
-          commit_sha: ${{ needs.prepare.outputs.ref }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
-      - name: Use pushed tag
-        id: existing_tag
-        if: github.event_name == 'push'
-        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: [prepare, version]
+    needs: [prepare, test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -103,7 +74,7 @@ jobs:
           make build \
             GOOS=${{ matrix.goos }} \
             GOARCH=${{ matrix.goarch }} \
-            VERSION=${{ needs.version.outputs.version }} \
+            VERSION=${{ needs.prepare.outputs.version }} \
             COMMIT=${{ needs.prepare.outputs.ref }} \
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
       - name: Archive
@@ -127,7 +98,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [prepare, version, build]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,17 +111,15 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
-      - name: Publish GitHub Release
+      - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ needs.version.outputs.version }}
+          tag_name: ${{ needs.prepare.outputs.version }}
           files: dist/*
-          generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
 
   verify-installer:
-    needs: [version, publish]
+    needs: [prepare, publish]
     strategy:
       fail-fast: false
       matrix:
@@ -158,11 +127,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
       - name: Install released CLI
         shell: bash
         run: |
           install_dir="$RUNNER_TEMP/nistro-bin"
-          sh install.sh --version "${{ needs.version.outputs.version }}" --install-dir "$install_dir" --no-modify-path
+          sh install.sh --version "${{ needs.prepare.outputs.version }}" --install-dir "$install_dir" --no-modify-path
           if [ "${{ runner.os }}" = Windows ]; then
             "$install_dir/nistro.exe" --version
           else

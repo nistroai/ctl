@@ -29,10 +29,13 @@ Pull requests and merge-queue checks targeting `main` run `go test ./...` and
 build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
 
 Every successful merge to `main` runs the Build workflow and then creates the
-next semantic-version tag and release. The default version bump is a patch;
-include `#minor` or `#major` in the merge commit message for a larger bump. The
-release contains archives for Linux, macOS, and Windows on AMD64 and ARM64. A
-manually pushed `v*` tag also publishes a release:
+next semantic-version tag. The default version bump is a patch; include
+`#minor` or `#major` in the merge commit message for a larger bump.
+
+Publishing a GitHub Release for one of those tags triggers the Release workflow.
+It builds and uploads archives for Linux, macOS, and Windows on AMD64 and ARM64,
+generates checksums, and verifies the installer on all supported platforms. Tags
+can also be created manually:
 
 ```bash
 git tag v0.1.0
