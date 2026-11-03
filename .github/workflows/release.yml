@@ -167,4 +167,5 @@ jobs:
       environment: production
       cli-version: ${{ needs.version.outputs.version }}
       server: ${{ vars.NISTRO_SERVER || 'https://api.nistro.ai' }}
+      run-canaries: true
     secrets: inherit

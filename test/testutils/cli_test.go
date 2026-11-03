@@ -123,8 +123,25 @@ func TestCLITimeoutTerminatesChild(t *testing.T) {
 	}
 }
 
+func TestCLILifecycleCancellationTerminatesChild(t *testing.T) {
+	c := helperCLI(t, Options{Timeout: 5 * time.Second})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(100*time.Millisecond, cancel)
+	defer timer.Stop()
+	start := time.Now()
+	result := c.RunContext(ctx, "", "-test.run=^TestCLIHelperProcess$", "--", "timeout")
+	if !errors.Is(result.Err, context.Canceled) || result.ExitCode == 0 {
+		t.Fatal("lifecycle cancellation did not terminate the child")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("child outlived the canceled lifecycle")
+	}
+}
+
 func TestCLIRedactsKnownAndPersistedCredentials(t *testing.T) {
 	c := helperCLI(t, Options{Token: "known-token", Secrets: []string{"overlap", "overlap-long-secret", "quote\"password"}})
+	c.AddSecrets("new-deployment-key")
 	sessions := filepath.Join(c.Home(), ".nistro", "sessions.json")
 	if err := os.MkdirAll(filepath.Dir(sessions), 0700); err != nil {
 		t.Fatal(err)
@@ -132,9 +149,9 @@ func TestCLIRedactsKnownAndPersistedCredentials(t *testing.T) {
 	if err := os.WriteFile(sessions, []byte(`{"https://selected.example":"saved-session-token"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	text := `known-token overlap-long-secret saved-session-token quote\"password {"api_key":"unknown-api-key","nested":{"access_token":"unknown-token"},"password":"unknown-password"}`
+	text := `known-token overlap-long-secret saved-session-token new-deployment-key quote\"password {"api_key":"unknown-api-key","nested":{"access_token":"unknown-token"},"password":"unknown-password"}`
 	redacted := c.Redact(text)
-	for _, secret := range []string{"known-token", "overlap-long-secret", "saved-session-token", `quote\"password`, "unknown-api-key", "unknown-token", "unknown-password"} {
+	for _, secret := range []string{"known-token", "overlap-long-secret", "saved-session-token", "new-deployment-key", `quote\"password`, "unknown-api-key", "unknown-token", "unknown-password"} {
 		if strings.Contains(redacted, secret) {
 			t.Fatal("credential remained in redacted diagnostics")
 		}

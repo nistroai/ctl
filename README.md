@@ -30,8 +30,9 @@ build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
 
 Go binary contract tests run the real CLI against a local test server. Stable
 releases also run authenticated production smoke tests after installing the
-published binaries. The smoke workflow can be called after backend production
-deployments or run manually. See [the test framework guide](test/README.md) for
+published binaries, followed by dedicated deployment lifecycle canaries with
+real inference requests and PostgreSQL queries. The workflow can be called after
+backend production deployments or run manually. See [the test framework guide](test/README.md) for
 coverage, local commands, GitHub secrets, and workflow integration.
 Run `make test-readme` to execute the documented CLI examples and configuration
 checks against a local test API using the real binary.

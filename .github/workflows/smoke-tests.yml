@@ -15,6 +15,10 @@ on:
         description: Nistro API server to validate
         type: string
         default: https://api.nistro.ai
+      run-canaries:
+        description: Provision, query, update, and delete dedicated Inference and Postgres test deployments
+        type: boolean
+        default: true
     secrets:
       SMOKE_TEST_EMAIL:
         required: false
@@ -24,6 +28,23 @@ on:
         required: false
       CLI_REPOSITORY_TOKEN:
         description: Read token when the caller cannot access the CLI repository
+        required: false
+      CANARY_POSTGRES_CA_CERT:
+        description: Optional PEM certificate authority for PostgreSQL TLS verification
+        required: false
+      NISTRO_CANARY_POSTGRES_ON_DEMAND_CREATE_CONFIG:
+        required: false
+      NISTRO_CANARY_POSTGRES_ON_DEMAND_UPDATE_CONFIG:
+        required: false
+      NISTRO_CANARY_POSTGRES_SCALE_CREATE_CONFIG:
+        required: false
+      NISTRO_CANARY_POSTGRES_SCALE_UPDATE_CONFIG:
+        required: false
+      NISTRO_CANARY_INFERENCE_ON_DEMAND_CREATE_CONFIG:
+        required: false
+      NISTRO_CANARY_INFERENCE_SCALE_CREATE_CONFIG:
+        required: false
+      NISTRO_CANARY_INFERENCE_SCALE_UPDATE_CONFIG:
         required: false
   workflow_dispatch:
     inputs:
@@ -42,6 +63,11 @@ on:
         type: string
         default: https://api.nistro.ai
         required: true
+      run-canaries:
+        description: Provision, query, update, and delete dedicated Inference and Postgres test deployments
+        type: boolean
+        default: true
+        required: true
 
 permissions:
   contents: read
@@ -51,6 +77,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ${{ inputs.environment }}
+    outputs:
+      cli-version: ${{ steps.release.outputs.version }}
     # Isolated read/discovery runs can overlap. An environment concurrency group
     # would replace older pending runs when several releases arrive together.
     steps:
@@ -109,7 +137,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -json -count=1 -timeout 15m ./test/smoke_test/... | tee smoke-results.json
+          # A release predating this suite must fail instead of passing with no tests.
+          go test -list '^TestProductionSmoke$' ./test/smoke_test/... | awk '$0 == "TestProductionSmoke" { found = 1 } END { exit !found }'
+          go test -json -count=1 -timeout 15m ./test/smoke_test/... -run '^TestProductionSmoke$' | tee smoke-results.json
 
       - name: Upload smoke results
         if: always()
@@ -117,5 +147,97 @@ jobs:
         with:
           name: cli-smoke-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: smoke-results.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  canaries:
+    name: Canary (${{ matrix.name }})
+    needs: smoke-tests
+    if: inputs.run-canaries
+    runs-on: ubuntu-latest
+    # Each test has a 30m lifecycle deadline and independent 5m cleanup.
+    # Leave headroom for cleanup before Go or the runner terminates the job.
+    timeout-minutes: 45
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: postgres-on-demand
+            case: postgres/on-demand
+          - name: postgres-scale
+            case: postgres/scale
+          - name: inference-on-demand
+            case: inference/on-demand
+          - name: inference-scale
+            case: inference/scale
+    steps:
+      - name: Checkout CLI release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nistroai/ctl
+          ref: ${{ needs.smoke-tests.outputs.cli-version }}
+          token: ${{ secrets.CLI_REPOSITORY_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install released binary
+        env:
+          RELEASE_VERSION: ${{ needs.smoke-tests.outputs.cli-version }}
+        run: |
+          install_dir="$RUNNER_TEMP/nistro-canary-bin"
+          sh install.sh --version "$RELEASE_VERSION" --install-dir "$install_dir" --no-modify-path
+          echo "NISTRO_TEST_BINARY=$install_dir/nistro" >> "$GITHUB_ENV"
+
+      - name: Configure PostgreSQL CA trust
+        if: startsWith(matrix.case, 'postgres/')
+        env:
+          POSTGRES_CA_CERT: ${{ secrets.CANARY_POSTGRES_CA_CERT }}
+        shell: bash
+        run: |
+          if [[ -n "$POSTGRES_CA_CERT" ]]; then
+            ca_file="$RUNNER_TEMP/nistro-canary-postgres-ca.pem"
+            umask 077
+            printf '%s\n' "$POSTGRES_CA_CERT" > "$ca_file"
+            echo "NISTRO_CANARY_POSTGRES_SSLROOTCERT=$ca_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run deployment and data-plane canary
+        env:
+          ENABLE_CANARY_TEST: "true"
+          NISTRO_TEST_EXPECTED_VERSION: ${{ needs.smoke-tests.outputs.cli-version }}
+          NISTRO_SERVER: ${{ inputs.server }}
+          NISTRO_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          NISTRO_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          NISTRO_TOKEN: ${{ secrets.SMOKE_TEST_TOKEN }}
+          NISTRO_CANARY_CASES: ${{ matrix.case }}
+          NISTRO_CANARY_TIMEOUT: 30m
+          NISTRO_CANARY_MODEL: ${{ vars.NISTRO_CANARY_MODEL }}
+          NISTRO_CANARY_LOCATION: ${{ vars.NISTRO_CANARY_LOCATION }}
+          NISTRO_CANARY_SERVED_MODEL: ${{ vars.NISTRO_CANARY_SERVED_MODEL }}
+          NISTRO_CANARY_POSTGRES_ON_DEMAND_CREATE_CONFIG: ${{ secrets.NISTRO_CANARY_POSTGRES_ON_DEMAND_CREATE_CONFIG }}
+          NISTRO_CANARY_POSTGRES_ON_DEMAND_UPDATE_CONFIG: ${{ secrets.NISTRO_CANARY_POSTGRES_ON_DEMAND_UPDATE_CONFIG }}
+          NISTRO_CANARY_POSTGRES_SCALE_CREATE_CONFIG: ${{ secrets.NISTRO_CANARY_POSTGRES_SCALE_CREATE_CONFIG }}
+          NISTRO_CANARY_POSTGRES_SCALE_UPDATE_CONFIG: ${{ secrets.NISTRO_CANARY_POSTGRES_SCALE_UPDATE_CONFIG }}
+          NISTRO_CANARY_INFERENCE_ON_DEMAND_CREATE_CONFIG: ${{ secrets.NISTRO_CANARY_INFERENCE_ON_DEMAND_CREATE_CONFIG }}
+          NISTRO_CANARY_INFERENCE_SCALE_CREATE_CONFIG: ${{ secrets.NISTRO_CANARY_INFERENCE_SCALE_CREATE_CONFIG }}
+          NISTRO_CANARY_INFERENCE_SCALE_UPDATE_CONFIG: ${{ secrets.NISTRO_CANARY_INFERENCE_SCALE_UPDATE_CONFIG }}
+        shell: bash
+        run: |
+          set -o pipefail
+          # go test succeeds when -run matches nothing; require the canary first.
+          go test -list '^TestProductionCanary$' ./test/smoke_test/... | awk '$0 == "TestProductionCanary" { found = 1 } END { exit !found }'
+          go test -json -count=1 -timeout 40m ./test/smoke_test/... -run '^TestProductionCanary$' | tee canary-results.json
+
+      - name: Upload canary results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-canary-results-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: canary-results.json
           if-no-files-found: warn
           retention-days: 14

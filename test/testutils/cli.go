@@ -130,9 +130,24 @@ func (c *CLI) SetToken(token string) {
 	c.secrets = append(c.secrets, token)
 }
 
+// AddSecrets protects credentials learned from a deployment description as
+// well as credentials supplied when constructing the CLI.
+func (c *CLI) AddSecrets(values ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.secrets = append(c.secrets, values...)
+}
+
 // Run executes arguments directly, without a shell, and never logs its streams.
 // An empty input supplies EOF, preventing accidental interactive login prompts.
 func (c *CLI) Run(input string, args ...string) Result {
+	return c.RunContext(context.Background(), input, args...)
+}
+
+// RunContext bounds the subprocess by both the caller's lifecycle deadline and
+// the per-command timeout. Cancellation kills and waits for the process before
+// returning, so cleanup cannot race an outstanding mutating invocation.
+func (c *CLI) RunContext(parent context.Context, input string, args ...string) Result {
 	c.rememberSessionSecrets()
 	c.mu.Lock()
 	token := c.token
@@ -141,7 +156,7 @@ func (c *CLI) Run(input string, args ...string) Result {
 	}
 	c.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	ctx, cancel := context.WithTimeout(parent, c.timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, c.binary, args...)
 	command.Dir = c.home

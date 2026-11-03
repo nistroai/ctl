@@ -1,5 +1,6 @@
 // Package smoke_test exercises a released CLI against a real Nistro server.
-// Every operation here is a login, logout, read, or discovery request.
+// TestProductionSmoke checks login, logout, reads, and discovery.
+// TestProductionCanary additionally provisions and verifies dedicated resources.
 package smoke_test
 
 import (
@@ -28,77 +29,7 @@ func TestProductionSmoke(t *testing.T) {
 		t.Skip("live smoke tests are disabled")
 	}
 
-	// An enabled run must never build from source or silently skip missing auth.
-	binary := strings.TrimSpace(os.Getenv("NISTRO_TEST_BINARY"))
-	if binary == "" {
-		t.Fatal("NISTRO_TEST_BINARY must point to the binary to validate")
-	}
-	email := strings.TrimSpace(os.Getenv("NISTRO_EMAIL"))
-	password := os.Getenv("NISTRO_PASSWORD")
-	token := strings.TrimSpace(os.Getenv("NISTRO_TOKEN"))
-	if (email == "") != (password == "") {
-		t.Fatal("set both NISTRO_EMAIL and NISTRO_PASSWORD, or use only NISTRO_TOKEN")
-	}
-	if email == "" && token == "" {
-		t.Fatal("enabled smoke tests require NISTRO_EMAIL and NISTRO_PASSWORD, or NISTRO_TOKEN")
-	}
-	cli := testutils.New(t, testutils.Options{
-		Binary: binary, Server: setting("NISTRO_SERVER", "https://api.nistro.ai"),
-		Timeout: 90 * time.Second, Secrets: []string{email, password, token},
-	})
-
-	t.Run("version", func(t *testing.T) {
-		result := cli.MustRun(t, "", "--version")
-		fields := strings.Fields(result.Stdout)
-		if len(fields) < 2 || fields[0] != "nistro" || result.Stderr != "" {
-			t.Fatal("expected nistro version on stdout and no stderr")
-		}
-		if expected := os.Getenv("NISTRO_TEST_EXPECTED_VERSION"); expected != "" && fields[1] != expected {
-			t.Fatalf("binary version %q does not match release %q", fields[1], expected)
-		}
-	})
-
-	if email != "" {
-		if !t.Run("login", func(t *testing.T) {
-			result := cli.MustRun(t, password+"\n", "login", "--email", email, "--password-stdin")
-			if !strings.Contains(result.Stdout, "Logged in successfully.") || result.Stderr != "" {
-				t.Fatal("login did not confirm success cleanly")
-			}
-			path := filepath.Join(cli.Home(), ".nistro", "sessions.json")
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal("login did not persist a session")
-			}
-			var sessions map[string]string
-			if json.Unmarshal(data, &sessions) != nil || sessions[strings.TrimRight(setting("NISTRO_SERVER", "https://api.nistro.ai"), "/")] == "" {
-				t.Fatal("login did not save a token for the selected server")
-			}
-			for _, saved := range sessions {
-				if saved != "" && strings.Contains(result.Stdout+result.Stderr, saved) {
-					t.Fatal("login exposed the saved token")
-				}
-			}
-			if runtime.GOOS != "windows" {
-				info, err := os.Stat(path)
-				if err != nil || info.Mode().Perm()&0077 != 0 {
-					t.Fatal("saved session is accessible to other users")
-				}
-			}
-		}) {
-			t.Fatal("login failed; authenticated checks cannot run")
-		}
-		t.Cleanup(func() {
-			cli.MustRun(t, "", "logout")
-			data, err := os.ReadFile(filepath.Join(cli.Home(), ".nistro", "sessions.json"))
-			var sessions map[string]string
-			if err != nil || json.Unmarshal(data, &sessions) != nil || len(sessions) != 0 {
-				t.Error("logout did not clear the smoke test session")
-			}
-		})
-	} else {
-		cli.SetToken(token)
-		t.Run("login", func(t *testing.T) { t.Skip("token authentication configured; password login is not exercised") })
-	}
+	cli := newLiveCLI(t)
 
 	for _, product := range []string{"inference", "postgres"} {
 		t.Run(product+"/deployments", func(t *testing.T) {
@@ -183,6 +114,87 @@ func TestProductionSmoke(t *testing.T) {
 			})
 		}
 	})
+}
+
+// newLiveCLI verifies the selected executable and authenticates an isolated
+// session. Callers register resource cleanup afterward so logout happens last.
+func newLiveCLI(t *testing.T) *testutils.CLI {
+	t.Helper()
+	// An enabled run must never build from source or silently skip missing auth.
+	binary := strings.TrimSpace(os.Getenv("NISTRO_TEST_BINARY"))
+	if binary == "" {
+		t.Fatal("NISTRO_TEST_BINARY must point to the binary to validate")
+	}
+	email := strings.TrimSpace(os.Getenv("NISTRO_EMAIL"))
+	password := os.Getenv("NISTRO_PASSWORD")
+	token := strings.TrimSpace(os.Getenv("NISTRO_TOKEN"))
+	if (email == "") != (password == "") {
+		t.Fatal("set both NISTRO_EMAIL and NISTRO_PASSWORD, or use only NISTRO_TOKEN")
+	}
+	if email == "" && token == "" {
+		t.Fatal("enabled smoke tests require NISTRO_EMAIL and NISTRO_PASSWORD, or NISTRO_TOKEN")
+	}
+	cli := testutils.New(t, testutils.Options{
+		Binary: binary, Server: setting("NISTRO_SERVER", "https://api.nistro.ai"),
+		Timeout: 90 * time.Second, Secrets: []string{email, password, token},
+	})
+
+	if !t.Run("version", func(t *testing.T) {
+		result := cli.MustRun(t, "", "--version")
+		fields := strings.Fields(result.Stdout)
+		if len(fields) < 2 || fields[0] != "nistro" || result.Stderr != "" {
+			t.Fatal("expected nistro version on stdout and no stderr")
+		}
+		if expected := os.Getenv("NISTRO_TEST_EXPECTED_VERSION"); expected != "" && fields[1] != expected {
+			t.Fatalf("binary version %q does not match release %q", fields[1], expected)
+		}
+	}) {
+		t.Fatal("selected binary did not pass release version verification")
+	}
+
+	if email != "" {
+		if !t.Run("login", func(t *testing.T) {
+			result := cli.MustRun(t, password+"\n", "login", "--email", email, "--password-stdin")
+			if !strings.Contains(result.Stdout, "Logged in successfully.") || result.Stderr != "" {
+				t.Fatal("login did not confirm success cleanly")
+			}
+			path := filepath.Join(cli.Home(), ".nistro", "sessions.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal("login did not persist a session")
+			}
+			var sessions map[string]string
+			if json.Unmarshal(data, &sessions) != nil || sessions[strings.TrimRight(setting("NISTRO_SERVER", "https://api.nistro.ai"), "/")] == "" {
+				t.Fatal("login did not save a token for the selected server")
+			}
+			for _, saved := range sessions {
+				if saved != "" && strings.Contains(result.Stdout+result.Stderr, saved) {
+					t.Fatal("login exposed the saved token")
+				}
+			}
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(path)
+				if err != nil || info.Mode().Perm()&0077 != 0 {
+					t.Fatal("saved session is accessible to other users")
+				}
+			}
+		}) {
+			t.Fatal("login failed; authenticated checks cannot run")
+		}
+		t.Cleanup(func() {
+			cli.MustRun(t, "", "logout")
+			data, err := os.ReadFile(filepath.Join(cli.Home(), ".nistro", "sessions.json"))
+			var sessions map[string]string
+			if err != nil || json.Unmarshal(data, &sessions) != nil || len(sessions) != 0 {
+				t.Error("logout did not clear the smoke test session")
+			}
+		})
+	} else {
+		cli.SetToken(token)
+		t.Run("login", func(t *testing.T) { t.Skip("token authentication configured; password login is not exercised") })
+	}
+
+	return cli
 }
 
 func setting(key, fallback string) string {
