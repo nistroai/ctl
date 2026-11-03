@@ -1,0 +1,121 @@
+name: CLI Smoke Tests
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment containing the smoke account configuration
+        type: string
+        default: production
+      cli-version:
+        description: Published CLI release tag to test, or latest
+        type: string
+        default: latest
+      server:
+        description: Nistro API server to validate
+        type: string
+        default: https://api.nistro.ai
+    secrets:
+      SMOKE_TEST_EMAIL:
+        required: false
+      SMOKE_TEST_PASSWORD:
+        required: false
+      SMOKE_TEST_TOKEN:
+        required: false
+      CLI_REPOSITORY_TOKEN:
+        description: Read token when the caller cannot access the CLI repository
+        required: false
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment containing the smoke account configuration
+        type: environment
+        default: production
+        required: true
+      cli-version:
+        description: Published CLI release tag to test, or latest
+        type: string
+        default: latest
+        required: true
+      server:
+        description: Nistro API server to validate
+        type: string
+        default: https://api.nistro.ai
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    # Isolated read/discovery runs can overlap. An environment concurrency group
+    # would replace older pending runs when several releases arrive together.
+    steps:
+      - name: Resolve published CLI version
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.CLI_REPOSITORY_TOKEN || github.token }}
+          CLI_VERSION: ${{ inputs.cli-version }}
+        shell: bash
+        run: |
+          if [[ "$CLI_VERSION" == latest ]]; then
+            CLI_VERSION=$(gh api repos/nistroai/ctl/releases/latest --jq .tag_name)
+          fi
+          if [[ ! "$CLI_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Expected a published semantic version tag such as v0.1.0" >&2
+            exit 1
+          fi
+          echo "version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+
+      # A reusable workflow retains its caller's repository context. Always
+      # load the CLI's tests and installer from the release being validated.
+      - name: Checkout CLI release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nistroai/ctl
+          ref: ${{ steps.release.outputs.version }}
+          token: ${{ secrets.CLI_REPOSITORY_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install released binary
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          install_dir="$RUNNER_TEMP/nistro-smoke-bin"
+          sh install.sh --version "$RELEASE_VERSION" --install-dir "$install_dir" --no-modify-path
+          echo "NISTRO_TEST_BINARY=$install_dir/nistro" >> "$GITHUB_ENV"
+
+      - name: Run production CLI smoke tests
+        env:
+          ENABLE_SMOKE_TEST: "true"
+          NISTRO_TEST_EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+          NISTRO_SERVER: ${{ inputs.server }}
+          NISTRO_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          NISTRO_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          NISTRO_TOKEN: ${{ secrets.SMOKE_TEST_TOKEN }}
+          NISTRO_SMOKE_INFERENCE_ID: ${{ vars.NISTRO_SMOKE_INFERENCE_ID }}
+          NISTRO_SMOKE_POSTGRES_ID: ${{ vars.NISTRO_SMOKE_POSTGRES_ID }}
+          NISTRO_SMOKE_MODEL: ${{ vars.NISTRO_SMOKE_MODEL }}
+          NISTRO_SMOKE_MAX_MODEL_LEN: ${{ vars.NISTRO_SMOKE_MAX_MODEL_LEN }}
+          NISTRO_SMOKE_LOCATION: ${{ vars.NISTRO_SMOKE_LOCATION }}
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -json -count=1 -timeout 15m ./test/smoke_test/... | tee smoke-results.json
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-smoke-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-results.json
+          if-no-files-found: warn
+          retention-days: 14

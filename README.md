@@ -28,6 +28,14 @@ curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -
 Pull requests and merge-queue checks targeting `main` run `go test ./...` and
 build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
 
+Go binary contract tests run the real CLI against a local test server. Stable
+releases also run authenticated production smoke tests after installing the
+published binaries. The smoke workflow can be called after backend production
+deployments or run manually. See [the test framework guide](test/README.md) for
+coverage, local commands, GitHub secrets, and workflow integration.
+Run `make test-readme` to execute the documented CLI examples and configuration
+checks against a local test API using the real binary.
+
 Merges to `main` automatically create the next semantic-version tag and publish
 archives for Linux, macOS, and Windows on AMD64 and ARM64. The default version
 bump is a patch; include `#minor` or `#major` in the merge commit message for a
