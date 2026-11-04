@@ -82,13 +82,16 @@ version tag:
 1. Open the repository's **Releases** page and choose **Draft a new release**.
 2. Select the generated version tag and prepare the customer-facing title and
    release notes.
-3. Keep the release as a draft until it is approved and ready for customers.
-4. Publish the draft to start the Release workflow.
+3. Keep the release as a draft until it is approved and ready for validation.
+4. Publish the draft to start the Release workflow. The workflow immediately
+   marks it as a prerelease while it builds and validates the artifacts.
 
 Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
 and ARM64, generates `SHA256SUMS`, validates the installer, publishes a signed
-multi-architecture image to GHCR, and runs container E2E tests. A stable release
-is explicitly marked as the latest release; prereleases are not.
+multi-architecture image to GHCR, and runs container E2E tests. Only after every
+job succeeds does the workflow promote the GitHub release to stable and latest,
+and move the GHCR major, minor, and `latest` image aliases. If validation fails,
+the release remains a prerelease and the stable aliases are unchanged.
 
 Creating the draft does not start publication, so maintainers retain control
 over when customer-facing artifacts become available. Tags can also be created
