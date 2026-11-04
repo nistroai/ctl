@@ -40,12 +40,11 @@ jobs:
         run: |
           set -euo pipefail
           install_dir="$RUNNER_TEMP/nistro-bin"
-          version_args=()
           if [ -n "$RELEASE_VERSION" ]; then
-            version_args=(--version "$RELEASE_VERSION")
+            sh ./install.sh --version "$RELEASE_VERSION" --install-dir "$install_dir" --no-modify-path
+          else
+            sh ./install.sh --install-dir "$install_dir" --no-modify-path
           fi
-
-          sh ./install.sh "${version_args[@]}" --install-dir "$install_dir" --no-modify-path
 
           case "${{ runner.os }}" in
             Windows) binary="$install_dir/nistro.exe" ;;
