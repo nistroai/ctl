@@ -48,10 +48,10 @@ func testREADMEAuthAndConfig(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				const sessionToken = "readme-session-token"
 				const overrideToken = "readme-automation-token"
-				var signins atomic.Int32
+				var loginCalls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method == http.MethodPost && r.URL.Path == "/v1/auth/signin" {
-						signins.Add(1)
+						loginCalls.Add(1)
 						var credentials map[string]string
 						decoder := json.NewDecoder(r.Body)
 						if err := decoder.Decode(&credentials); err != nil || len(credentials) != 2 || credentials["email"] != tc.email || credentials["password"] != tc.password {
@@ -81,7 +81,7 @@ func testREADMEAuthAndConfig(t *testing.T) {
 					Secrets: []string{tc.password, "unused-env-password", sessionToken, overrideToken}, AfterRun: commandObserver(t),
 				})
 				login := cli.MustRun(t, tc.input, tc.args...)
-				if login.Stdout != "Logged in successfully.\n" || login.Stderr != "" || signins.Load() != 1 {
+				if login.Stdout != "Logged in successfully.\n" || login.Stderr != "" || loginCalls.Load() != 1 {
 					t.Fatal("documented login did not return one clean success response")
 				}
 				sessionPath := filepath.Join(cli.Home(), ".nistro", "sessions.json")
@@ -133,7 +133,7 @@ func testREADMEAuthAndConfig(t *testing.T) {
 				if result.ExitCode == 0 || !strings.Contains(result.Stderr, "401") || result.Stdout != "" {
 					t.Fatal("clearing NISTRO_TOKEN after logout left the CLI authenticated")
 				}
-				if signins.Load() != 1 {
+				if loginCalls.Load() != 1 {
 					t.Fatal("reading deployments or logging out unexpectedly attempted sign-in")
 				}
 			})

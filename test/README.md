@@ -264,11 +264,13 @@ version. The Actions workflow always asserts the selected release version.
 
 ## GitHub Actions
 
-The existing Release workflow now installs and tests the published binary on
-Linux AMD64/ARM64, macOS, and Windows. After these checks, every
-stable release calls `.github/workflows/smoke-tests.yml` against production,
-including all four lifecycle canaries.
-Prereleases still run binary contract tests and can run live tests manually.
+Publishing a draft release starts the existing Release workflow, which marks
+the release as a prerelease while validating it. The workflow installs and tests
+the uploaded binary on Linux AMD64/ARM64, macOS, and Windows. Installer, binary
+contract, and container checks must succeed before promotion to stable/latest.
+After promotion, every stable version tag calls `.github/workflows/smoke-tests.yml`
+against production, including all four lifecycle canaries. Tags with a prerelease
+suffix still run binary contract tests and can run live tests manually.
 
 The smoke workflow resolves `latest` once to an exact published tag, checks out
 that tag's tests, and installs its checksum-verified release archive. It never
@@ -278,10 +280,10 @@ successful production result. Each canary matrix job uses its own isolated sessi
 Runs may overlap, so GitHub concurrency groups cannot replace a pending
 production release check.
 
-The release pipeline calls the workflow directly after publishing because
-releases created with `GITHUB_TOKEN` do not trigger another workflow listening
+The release pipeline calls the workflow directly after promotion because
+releases updated with `GITHUB_TOKEN` do not trigger another workflow listening
 for `release: published`. Smoke failure marks the release workflow failed;
-the already published release remains available.
+the already promoted release remains available.
 
 To validate the CLI after **backend production releases**, add a dependent job
 to that repository's deployment workflow:

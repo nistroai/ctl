@@ -1,10 +1,15 @@
 name: Build
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   merge_group:
     branches: [main]
+
+env:
+  GOLANGCI_LINT_VERSION: v2.15.0
 
 permissions:
   contents: read
@@ -14,6 +19,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Download dependencies
+        run: go mod download
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --default=none --enable=govet,ineffassign,misspell,unconvert ./...
+          skip-cache: true
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -25,16 +53,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Download and verify dependencies
+        run: |
+          go mod download
+          go mod verify
+      - name: Set up gotestsum
+        uses: autero1/action-gotestsum@7263b9d73912eec65f46337689e59fac865c425f # v2.0.0
+        with:
+          gotestsum_version: 1.13.0
       - name: Run tests
         # Binary tests do not import production packages; disable test caching
         # so CLI source changes always exercise a freshly built executable.
-        run: go test -count=1 -timeout 10m ./...
+        run: gotestsum --format github-actions -- -count=1 -timeout 10m ./...
       - name: Verify PostgreSQL canary fixtures
         timeout-minutes: 10
         run: bash test/resources/run-postgres-canary-fixtures.sh
 
   build:
-    needs: test
+    needs: [lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

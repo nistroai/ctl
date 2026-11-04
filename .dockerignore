@@ -1,0 +1,11 @@
+dist/
+*.out
+vendor/
+.git/
+.github/
+.vscode/
+.DS_Store
+**/*_test.go
+**/testdata/
+coverage*
+*.md
