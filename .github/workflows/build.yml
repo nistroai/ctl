@@ -62,7 +62,12 @@ jobs:
         with:
           gotestsum_version: 1.13.0
       - name: Run tests
-        run: gotestsum --format github-actions -- ./...
+        # Binary tests do not import production packages; disable test caching
+        # so CLI source changes always exercise a freshly built executable.
+        run: gotestsum --format github-actions -- -count=1 -timeout 10m ./...
+      - name: Verify PostgreSQL canary fixtures
+        timeout-minutes: 10
+        run: bash test/resources/run-postgres-canary-fixtures.sh
 
   build:
     needs: [lint, test]
