@@ -16,7 +16,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  set-prerelease:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mark release as prerelease during validation
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          prerelease: true
+          make_latest: false
+
   prepare:
+    needs: set-prerelease
     runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.release.outputs.ref }}
@@ -121,7 +134,8 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.version }}
           files: dist/*
           fail_on_unmatched_files: true
-          make_latest: ${{ github.event.release.prerelease && 'false' || 'true' }}
+          prerelease: true
+          make_latest: false
 
   test-install-script:
     needs: [prepare, publish]
@@ -161,10 +175,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=sha,format=long
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
       - name: Log into registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -206,6 +217,8 @@ jobs:
     needs: [release-package-multi-arch]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.inspect.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -226,10 +239,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=sha,format=long
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
       - name: Log into registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -287,3 +297,47 @@ jobs:
           cli_version=$(docker run --rm --platform "${{ matrix.platform }}" "$image" --version)
           echo "Nistro CLI version: $cli_version"
           echo "$cli_version" | grep -F "$version"
+
+  promote-release:
+    name: Promote release to latest
+    needs:
+      - prepare
+      - test-install-script
+      - release-package-multi-arch-merge
+      - docker-e2e-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Extract stable Docker aliases
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+      - name: Log into registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote image aliases
+        env:
+          DIGEST: ${{ needs.release-package-multi-arch-merge.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+      - name: Promote GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          draft: false
+          prerelease: false
+          make_latest: true
