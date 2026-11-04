@@ -176,12 +176,8 @@ func prepareCanary(t *testing.T, cli *testutils.CLI, name string) (canaryCase, e
 			return c, fmt.Errorf("%s_UPDATE_CONFIG must contain one JSON object", key)
 		}
 	}
-	changed := false
-	for key, value := range c.update {
-		changed = changed || !canaryEqual(value, c.create[key])
-	}
-	if !changed {
-		return c, errors.New("canary update must change at least one create setting")
+	if len(c.update) == 0 {
+		return c, errors.New("canary update must contain at least one setting")
 	}
 	return c, nil
 }
@@ -252,6 +248,24 @@ func runCanaryLifecycle(t *testing.T, cli *testutils.CLI, c canaryCase, timing c
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timing.lifecycle)
 	defer cancel()
+	initialParameters, _, err := canaryParameters(c.create)
+	if err != nil {
+		return err
+	}
+	replacement, replacesParameters, err := canaryParameters(c.update)
+	if err != nil {
+		return err
+	}
+	// Capture the platform baseline before applying custom initial parameters.
+	// A subsequent reset_val may already contain those custom values.
+	bootstrapParameters := c.product == "postgres" && replacesParameters && len(initialParameters) > 0
+	createConfig := make(map[string]any, len(c.create))
+	for key, value := range c.create {
+		createConfig[key] = value
+	}
+	if bootstrapParameters {
+		delete(createConfig, "parameters")
+	}
 	baseline, err := canaryCommand(ctx, cli, c.product, "list", "-o", "json")
 	if err != nil {
 		return fmt.Errorf("baseline list: %w", err)
@@ -260,7 +274,7 @@ func runCanaryLifecycle(t *testing.T, cli *testutils.CLI, c canaryCase, timing c
 	if err != nil {
 		return err
 	}
-	createPath, err := canaryConfigFile(t, c.create)
+	createPath, err := canaryConfigFile(t, createConfig)
 	if err != nil {
 		return err
 	}
@@ -277,12 +291,18 @@ func runCanaryLifecycle(t *testing.T, cli *testutils.CLI, c canaryCase, timing c
 		return errors.New("create returned a preexisting deployment ID; refusing to mutate or delete it")
 	}
 	deleted := false
+	var probe *canaryProbe
 	t.Cleanup(func() {
 		if deleted {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), timing.cleanup)
 		defer cancel()
+		if probe != nil && probe.postgres != nil {
+			if err := probe.postgres.Cleanup(cleanupCtx, probe.connectionString); err != nil {
+				t.Logf("SQL checkpoint cleanup failed; continuing owned deployment deletion: %v", err)
+			}
+		}
 		if err := deleteCanary(cleanupCtx, cli, c.product, id, timing.poll); err != nil {
 			t.Errorf("cleanup of owned %s canary %s failed: %v", c.product, id, err)
 		}
@@ -296,11 +316,67 @@ func runCanaryLifecycle(t *testing.T, cli *testutils.CLI, c canaryCase, timing c
 	if err := waitCanaryListed(ctx, cli, c.product, id, timing.poll); err != nil {
 		return fmt.Errorf("list created deployment: %w", err)
 	}
-	probe := &canaryProbe{caseInfo: c, marker: c.marker, cli: cli}
-	if _, err := waitCanaryReady(ctx, cli, c.product, id, nil, probe, timing); err != nil {
+	probe = &canaryProbe{caseInfo: c, marker: c.marker, cli: cli, expectedParameters: initialParameters}
+	if bootstrapParameters {
+		probe.expectedParameters = nil
+	}
+	before, err := waitCanaryReady(ctx, cli, c.product, id, nil, probe, timing)
+	if err != nil {
 		return fmt.Errorf("initial readiness/data plane: %w", err)
 	}
+	platformSettings := map[string]canaryutils.PostgresSetting{}
+	names := canaryParameterNames(initialParameters, replacement)
+	if c.product == "postgres" && replacesParameters {
+		probeCtx, cancel := context.WithTimeout(ctx, timing.probe)
+		platformSettings, err = canaryutils.ReadPostgresSettings(probeCtx, probe.connectionString, names)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("capture platform parameter baseline: %w", err)
+		}
+	}
+	if bootstrapParameters {
+		bootstrap := map[string]any{"parameters": initialParameters}
+		path, err := canaryConfigFile(t, bootstrap)
+		if err != nil {
+			return err
+		}
+		updated, err := canaryCommand(ctx, cli, c.product, "update", c.tier, id, "--config-file", path, "-o", "json")
+		if err != nil {
+			return fmt.Errorf("initial parameter customization: %w", err)
+		}
+		if returnedID := canaryString(canaryResource(updated), "id"); returnedID != "" && returnedID != id {
+			return errors.New("initial parameter customization returned a different deployment ID")
+		}
+		probe.expectedParameters = initialParameters
+		before, err = waitCanaryReady(ctx, cli, c.product, id, bootstrap, probe, timing)
+		if err != nil {
+			return fmt.Errorf("verify initial parameter customization: %w", err)
+		}
+	}
 	if c.update != nil {
+		currentSettings := map[string]canaryutils.PostgresSetting{}
+		if c.product == "postgres" && replacesParameters {
+			probeCtx, cancel := context.WithTimeout(ctx, timing.probe)
+			currentSettings, err = canaryutils.ReadPostgresSettings(probeCtx, probe.connectionString, names)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("capture effective pre-update parameters: %w", err)
+			}
+		}
+		resets := map[string]canaryutils.PostgresSetting{}
+		if replacesParameters {
+			for name := range initialParameters {
+				if _, retained := replacement[name]; !retained {
+					resets[name] = platformSettings[name]
+				}
+			}
+		}
+		if err := canaryRequireTransition(before, c.product, c.update, currentSettings, replacement, resets); err != nil {
+			return err
+		}
+		if replacesParameters {
+			probe.expectedParameters, probe.expectedResets = replacement, resets
+		}
 		updatePath, err := canaryConfigFile(t, c.update)
 		if err != nil {
 			return err
@@ -312,7 +388,6 @@ func runCanaryLifecycle(t *testing.T, cli *testutils.CLI, c canaryCase, timing c
 		if returnedID := canaryString(canaryResource(updated), "id"); returnedID != "" && returnedID != id {
 			return errors.New("update returned a different deployment ID")
 		}
-		probe.afterUpdate = true
 		if _, err := waitCanaryReady(ctx, cli, c.product, id, c.update, probe, timing); err != nil {
 			return fmt.Errorf("updated readiness/data plane: %w", err)
 		}
@@ -362,6 +437,87 @@ func canaryConfigFile(t *testing.T, config map[string]any) (string, error) {
 		return "", errors.New("save canary configuration")
 	}
 	return path, nil
+}
+
+func canaryParameters(config map[string]any) (map[string]string, bool, error) {
+	value, exists := config["parameters"]
+	parameters := map[string]string{}
+	if !exists {
+		return parameters, false, nil
+	}
+	switch supplied := value.(type) {
+	case map[string]string:
+		for name, value := range supplied {
+			parameters[name] = value
+		}
+	case map[string]any:
+		for name, value := range supplied {
+			text, ok := value.(string)
+			if !ok {
+				return nil, true, errors.New("Postgres canary parameters must be an object of string values")
+			}
+			parameters[name] = text
+		}
+	default:
+		return nil, true, errors.New("Postgres canary parameters must be an object of string values")
+	}
+	return parameters, true, nil
+}
+
+func canaryParameterNames(groups ...map[string]string) []string {
+	seen := map[string]bool{}
+	for _, group := range groups {
+		for name := range group {
+			seen[name] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	return names
+}
+
+// Require an actual value change from the ready deployment, rather than treating
+// an omitted create option as different from the defaults injected by the CLI.
+func canaryRequireTransition(before map[string]any, product string, target map[string]any, settings map[string]canaryutils.PostgresSetting, requested map[string]string, resets map[string]canaryutils.PostgresSetting) error {
+	changed := false
+	for key, want := range target {
+		if key == "parameters" && product == "postgres" {
+			for name, value := range requested {
+				actual, exists := settings[name]
+				if !exists {
+					return errors.New("cannot determine effective pre-update PostgreSQL settings")
+				}
+				changed = changed || !canaryutils.PostgresSettingMatches(actual, value)
+			}
+			for name, baseline := range resets {
+				actual, exists := settings[name]
+				if !exists {
+					return errors.New("cannot determine effective pre-update PostgreSQL settings")
+				}
+				changed = changed || !canaryutils.PostgresSettingMatches(actual, baseline.Value)
+			}
+			continue
+		}
+		if key == "replicas" && product == "inference" {
+			minimum, minOK := before["min_replicas"]
+			maximum, maxOK := before["max_replicas"]
+			if minOK && maxOK && minimum != nil && maximum != nil {
+				changed = changed || !canaryEqual(minimum, want) || !canaryEqual(maximum, want)
+				continue
+			}
+		}
+		actual, exists := before[key]
+		if !exists || actual == nil {
+			return errors.New("cannot determine an effective pre-update value for every requested target")
+		}
+		changed = changed || !canaryEqual(actual, want)
+	}
+	if !changed {
+		return errors.New("canary update does not change effective pre-update values")
+	}
+	return nil
 }
 
 type canaryCommandFailure struct {
@@ -472,10 +628,18 @@ func waitCanaryReady(ctx context.Context, cli *testutils.CLI, product, id string
 				probeCtx, cancel := context.WithTimeout(ctx, timing.probe)
 				err = probe.check(probeCtx, response)
 				cancel()
+				if ctx.Err() != nil {
+					return nil, deadlineError(ctx.Err())
+				}
 				if err == nil {
 					return resource, nil
 				}
-				lastProbeError = err
+				// A child probe deadline can expire just before the parent's
+				// cancellation is visible. Preserve an earlier concrete failure
+				// rather than replacing it with that final context error.
+				if lastProbeError == nil || !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+					lastProbeError = err
+				}
 			}
 		}
 		if err := canaryPause(ctx, timing.poll); err != nil {
@@ -503,13 +667,12 @@ func canaryUpdateObserved(resource map[string]any, product string, target map[st
 	}
 	for key, want := range target {
 		if key == "parameters" && product == "postgres" {
-			// Nonempty parameter updates are proven against current_setting on
-			// the live database by the post-update probe, rather than comparing
-			// a public configuration map that may contain additional defaults.
-			if settings, ok := want.(map[string]any); ok && len(settings) > 0 {
+			// SQL proves retained/new values and restores removed keys to the
+			// platform baseline, including an explicitly empty replacement.
+			if _, ok := want.(map[string]any); ok {
 				continue
 			}
-			if settings, ok := want.(map[string]string); ok && len(settings) > 0 {
+			if _, ok := want.(map[string]string); ok {
 				continue
 			}
 		}
@@ -630,12 +793,13 @@ func canaryEqual(a, b any) bool {
 }
 
 type canaryProbe struct {
-	caseInfo         canaryCase
-	marker           string
-	cli              *testutils.CLI
-	postgres         *canaryutils.PostgresCheckpoint
-	connectionString string
-	afterUpdate      bool
+	caseInfo           canaryCase
+	marker             string
+	cli                *testutils.CLI
+	postgres           *canaryutils.PostgresCheckpoint
+	connectionString   string
+	expectedParameters map[string]string
+	expectedResets     map[string]canaryutils.PostgresSetting
 }
 
 func (p *canaryProbe) check(ctx context.Context, response map[string]any) error {
@@ -675,27 +839,25 @@ func (p *canaryProbe) check(ctx context.Context, response map[string]any) error 
 			return err
 		}
 		p.postgres = checkpoint
-		return nil
-	}
-	if err := p.postgres.Verify(ctx, connectionString); err != nil {
+	} else if err := p.postgres.Verify(ctx, connectionString); err != nil {
 		return err
 	}
-	if p.afterUpdate {
-		settings := map[string]string{}
-		if parameters, ok := p.caseInfo.update["parameters"].(map[string]any); ok {
-			for key, value := range parameters {
-				text, ok := value.(string)
-				if !ok {
-					return errors.New("Postgres update settings must be strings")
-				}
-				settings[key] = text
-			}
+	names := canaryParameterNames(p.expectedParameters)
+	for name := range p.expectedResets {
+		names = append(names, name)
+	}
+	settings, err := canaryutils.ReadPostgresSettings(ctx, connectionString, names)
+	if err != nil {
+		return err
+	}
+	for name, requested := range p.expectedParameters {
+		if actual, exists := settings[name]; !exists || !canaryutils.PostgresSettingMatches(actual, requested) {
+			return errors.New("Postgres canary configured setting did not match its requested value")
 		}
-		if parameters, ok := p.caseInfo.update["parameters"].(map[string]string); ok {
-			settings = parameters
-		}
-		if len(settings) > 0 {
-			return canaryutils.CheckPostgresSettings(ctx, connectionString, settings)
+	}
+	for name, baseline := range p.expectedResets {
+		if actual, exists := settings[name]; !exists || !canaryutils.PostgresSettingMatches(actual, baseline.Value) {
+			return errors.New("Postgres canary removed setting did not return to its platform baseline")
 		}
 	}
 	return nil

@@ -164,6 +164,88 @@ func TestPostgresCheckpointLocalDatabase(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "connect") || strings.Contains(err.Error(), untrusted.String()) {
 			t.Fatalf("untrusted certificate was not rejected safely: %v", err)
 		}
+		settings, err := ReadPostgresSettings(t.Context(), untrusted.String(), []string{"work_mem"})
+		if settings != nil || err == nil || strings.Contains(err.Error(), untrusted.String()) {
+			t.Fatal("settings snapshot accepted untrusted TLS or exposed connection credentials")
+		}
+	})
+	t.Run("settings snapshots verify replacement resets", func(t *testing.T) {
+		names := []string{"work_mem", "maintenance_work_mem", "work_mem"}
+		baseline, err := ReadPostgresSettings(t.Context(), uri, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(baseline) != 2 || names[0] != "work_mem" || names[1] != "maintenance_work_mem" || names[2] != "work_mem" {
+			t.Fatal("settings snapshot failed to deduplicate names or mutated its input")
+		}
+		for name, setting := range baseline {
+			var expected PostgresSetting
+			if err := connection.QueryRow(t.Context(), `SELECT current_setting($1), unit, vartype FROM pg_settings WHERE name=$1`, name).Scan(&expected.Value, &expected.Unit, &expected.Kind); err != nil {
+				t.Fatal(postgresError("test baseline read", err))
+			}
+			if setting != expected || setting.Value == "" || setting.Unit != "kB" || setting.Kind != "integer" {
+				t.Fatal("settings snapshot did not capture the effective value and metadata")
+			}
+		}
+		database := pgx.Identifier{config.Database}.Sanitize()
+		custom := map[string]string{"work_mem": "32MB", "maintenance_work_mem": "128MB"}
+		if PostgresSettingMatches(baseline["work_mem"], custom["work_mem"]) {
+			custom["work_mem"] = "64MB"
+		}
+		if PostgresSettingMatches(baseline["maintenance_work_mem"], custom["maintenance_work_mem"]) {
+			custom["maintenance_work_mem"] = "256MB"
+		}
+		for name, value := range custom {
+			reset := "ALTER DATABASE " + database + " RESET " + pgx.Identifier{name}.Sanitize()
+			defer connection.Exec(context.Background(), reset)
+			if _, err := connection.Exec(t.Context(), "ALTER DATABASE "+database+" SET "+pgx.Identifier{name}.Sanitize()+"='"+value+"'"); err != nil {
+				t.Fatal(postgresError("test custom settings setup", err))
+			}
+		}
+		customized, err := ReadPostgresSettings(t.Context(), uri, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range custom {
+			if !PostgresSettingMatches(customized[name], value) || PostgresSettingMatches(customized[name], baseline[name].Value) {
+				t.Fatal("initial customization was not observed independently of the baseline")
+			}
+		}
+		// An ignored subset replacement still satisfies the retained key. Reading
+		// the removed key is necessary to reject the stale database configuration.
+		if err := CheckPostgresSettings(t.Context(), uri, map[string]string{"work_mem": custom["work_mem"]}); err != nil {
+			t.Fatal(err)
+		}
+		if PostgresSettingMatches(customized["maintenance_work_mem"], baseline["maintenance_work_mem"].Value) {
+			t.Fatal("baseline comparison accepted an ignored parameter removal")
+		}
+		if _, err := connection.Exec(t.Context(), "ALTER DATABASE "+database+" RESET maintenance_work_mem"); err != nil {
+			t.Fatal(postgresError("test subset replacement", err))
+		}
+		subset, err := ReadPostgresSettings(t.Context(), uri, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !PostgresSettingMatches(subset["work_mem"], custom["work_mem"]) || !PostgresSettingMatches(subset["maintenance_work_mem"], baseline["maintenance_work_mem"].Value) {
+			t.Fatal("subset replacement did not retain one value and restore the removed baseline")
+		}
+		if _, err := connection.Exec(t.Context(), "ALTER DATABASE "+database+" RESET work_mem"); err != nil {
+			t.Fatal(postgresError("test empty replacement", err))
+		}
+		empty, err := ReadPostgresSettings(t.Context(), uri, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, setting := range baseline {
+			if !PostgresSettingMatches(empty[name], setting.Value) {
+				t.Fatal("empty replacement did not restore all captured baseline values")
+			}
+		}
+		invalidName := "work_mem');SELECT 'snapshot-injection-secret'--"
+		partial, err := ReadPostgresSettings(t.Context(), uri, []string{"maintenance_work_mem", invalidName})
+		if partial != nil || err == nil || !strings.Contains(err.Error(), "42704") || strings.Contains(err.Error(), "snapshot-injection-secret") || strings.Contains(err.Error(), uri) {
+			t.Fatal("snapshot failed to bind a setting name safely or returned partial results")
+		}
 	})
 	t.Run("failed insert cleans its table", func(t *testing.T) {
 		// A disposable-database event trigger injects a real INSERT failure only

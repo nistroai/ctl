@@ -13,37 +13,72 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CheckPostgresSettings reconnects and verifies the requested server settings.
-// Parameter names are bound as query arguments; credentials and setting values
-// are never included in errors. PostgreSQL byte/time units and boolean aliases
-// are compared by value so equivalent settings such as 32MB and 32768kB match.
-func CheckPostgresSettings(ctx context.Context, connectionString string, settings map[string]string) error {
-	if len(settings) == 0 {
-		return nil
+// PostgresSetting captures an effective server value and the metadata needed to
+// compare its PostgreSQL units and boolean aliases with a requested value.
+type PostgresSetting struct {
+	Value string
+	Unit  string
+	Kind  string
+}
+
+// ReadPostgresSettings reconnects and captures the named effective settings.
+// Names are sorted, deduplicated, and bound as query arguments. Errors omit
+// credentials, names, and values; an empty name list does not connect.
+func ReadPostgresSettings(ctx context.Context, connectionString string, names []string) (map[string]PostgresSetting, error) {
+	settings := make(map[string]PostgresSetting, len(names))
+	if len(names) == 0 {
+		return settings, nil
 	}
 	config, err := verifiedPostgresConfig(connectionString)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	connection, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		return postgresError("settings connect", err)
+		return nil, postgresError("settings connect", err)
 	}
 	defer closePostgres(connection)
+	unique := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		unique[name] = struct{}{}
+	}
+	ordered := make([]string, 0, len(unique))
+	for name := range unique {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	for _, name := range ordered {
+		var setting PostgresSetting
+		err := connection.QueryRow(ctx, `SELECT current_setting($1), COALESCE((SELECT unit FROM pg_settings WHERE name=$1), ''), COALESCE((SELECT vartype FROM pg_settings WHERE name=$1), '')`, name).Scan(&setting.Value, &setting.Unit, &setting.Kind)
+		if err != nil {
+			return nil, postgresError("read configured setting", err)
+		}
+		settings[name] = setting
+	}
+	return settings, nil
+}
+
+// PostgresSettingMatches compares a snapshot with a requested value, accepting
+// equivalent PostgreSQL byte/time units and boolean aliases.
+func PostgresSettingMatches(setting PostgresSetting, requested string) bool {
+	return matchingPostgresSetting(setting.Value, requested, setting.Unit, setting.Kind)
+}
+
+// CheckPostgresSettings reconnects and verifies the requested server settings.
+// Credentials and setting names and values are never included in errors.
+func CheckPostgresSettings(ctx context.Context, connectionString string, settings map[string]string) error {
 	names := make([]string, 0, len(settings))
 	for name := range settings {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		var actual, unit, kind string
-		err := connection.QueryRow(ctx, `SELECT current_setting($1), COALESCE((SELECT unit FROM pg_settings WHERE name=$1), ''), COALESCE((SELECT vartype FROM pg_settings WHERE name=$1), '')`, name).Scan(&actual, &unit, &kind)
-		if err != nil {
-			return postgresError("read configured setting", err)
-		}
-		if !matchingPostgresSetting(actual, settings[name], unit, kind) {
+	observed, err := ReadPostgresSettings(ctx, connectionString, names)
+	if err != nil {
+		return err
+	}
+	for name, requested := range settings {
+		if !PostgresSettingMatches(observed[name], requested) {
 			return errors.New("Postgres canary configured setting did not match its requested value")
 		}
 	}

@@ -16,8 +16,9 @@ import (
 
 // CheckInference discovers the served model and performs one real, nonstreaming
 // OpenAI chat completion for the requested model or its unambiguous HF alias.
-// Responses must contain generated text and positive token usage; their content
-// is never included in errors. The caller may retry after a readiness failure.
+// Responses must identify the requested model and contain generated text and
+// positive token usage; their content is never included in errors. The caller
+// may retry after a readiness failure.
 // Remote endpoints require HTTPS; HTTP is reserved for loopback fixtures.
 func CheckInference(ctx context.Context, baseURL, apiKey, model string) error {
 	return checkInference(ctx, baseURL, apiKey, model, false)
@@ -80,6 +81,7 @@ func checkInference(ctx context.Context, baseURL, apiKey, model string, exactOnl
 		"max_tokens": 32, "temperature": 0, "stream": false,
 	}
 	var completion struct {
+		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
@@ -93,6 +95,9 @@ func checkInference(ctx context.Context, baseURL, apiKey, model string, exactOnl
 	}
 	if err := inferenceJSON(ctx, client, http.MethodPost, base.String()+"/chat/completions", apiKey, request, &completion); err != nil {
 		return err
+	}
+	if strings.TrimSpace(completion.Model) == "" || completion.Model != model {
+		return errors.New("Inference canary chat completion did not report the requested model")
 	}
 	if len(completion.Choices) == 0 || strings.TrimSpace(completion.Choices[0].Message.Content) == "" {
 		return errors.New("Inference canary returned no generated text")

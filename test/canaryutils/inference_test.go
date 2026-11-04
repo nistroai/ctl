@@ -65,7 +65,7 @@ func TestCheckInferencePathsAndGeneration(t *testing.T) {
 	}
 }
 
-const validCompletion = `{"choices":[{"message":{"content":"A generated greeting"}}],"usage":{"prompt_tokens":6,"completion_tokens":3,"total_tokens":9}}`
+const validCompletion = `{"model":"served-model","choices":[{"message":{"content":"A generated greeting"}}],"usage":{"prompt_tokens":6,"completion_tokens":3,"total_tokens":9}}`
 
 type recordingTransport func(*http.Request) (*http.Response, error)
 
@@ -111,6 +111,11 @@ func TestCheckInferenceTargetsRequestedModel(t *testing.T) {
 		{"no configured identity", "", "", []string{"unrelated-model"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			var completion map[string]any
+			if err := json.Unmarshal([]byte(validCompletion), &completion); err != nil {
+				t.Fatal(err)
+			}
+			completion["model"] = test.selected
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
@@ -131,7 +136,7 @@ func TestCheckInferenceTargetsRequestedModel(t *testing.T) {
 					w.WriteHeader(400)
 					return
 				}
-				fmt.Fprint(w, validCompletion)
+				_ = json.NewEncoder(w).Encode(completion)
 			}))
 			defer server.Close()
 			probe := CheckInference
@@ -155,16 +160,86 @@ func TestCheckInferenceTargetsRequestedModel(t *testing.T) {
 	}
 }
 
+func TestCheckInferenceRejectsInvalidCompletionModel(t *testing.T) {
+	const configured = "Qwen/Qwen2.5-7B-Instruct"
+	const modelDiagnostic = "chat completion did not report the requested model"
+	for _, test := range []struct {
+		name, requested, diagnostic string
+		responseModel               any
+		omitModel, exact            bool
+	}{
+		{name: "unrelated response model is also advertised", responseModel: "unrelated-model", diagnostic: modelDiagnostic},
+		{name: "missing response model", omitModel: true, diagnostic: modelDiagnostic},
+		{name: "empty response model", responseModel: "", diagnostic: modelDiagnostic},
+		{name: "whitespace response model", responseModel: " ", diagnostic: modelDiagnostic},
+		{name: "null response model", responseModel: nil, diagnostic: modelDiagnostic},
+		{name: "numeric response model", responseModel: 42, diagnostic: "invalid JSON"},
+		{name: "object response model", responseModel: map[string]string{"id": configured}, diagnostic: "invalid JSON"},
+		{name: "exact alias rejects configured model", requested: "runtime-alias", responseModel: configured, exact: true, diagnostic: modelDiagnostic},
+		{name: "exact configured identity rejects final segment", responseModel: "Qwen2.5-7B-Instruct", exact: true, diagnostic: modelDiagnostic},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requested := test.requested
+			if requested == "" {
+				requested = configured
+			}
+			var completion map[string]any
+			if err := json.Unmarshal([]byte(validCompletion), &completion); err != nil {
+				t.Fatal(err)
+			}
+			if test.omitModel {
+				delete(completion, "model")
+			} else {
+				completion["model"] = test.responseModel
+			}
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Method == http.MethodGet && r.URL.Path == "/openai/v1/models" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{
+						{"id": configured}, {"id": "Qwen2.5-7B-Instruct"}, {"id": "unrelated-model"}, {"id": "runtime-alias"},
+					}})
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != "/openai/v1/chat/completions" {
+					t.Error("unexpected completion model validation request")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var body struct{ Model string }
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != requested {
+					t.Error("completion did not target the selected advertised model")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(completion)
+			}))
+			defer server.Close()
+			probe := CheckInference
+			if test.exact {
+				probe = CheckInferenceExact
+			}
+			err := probe(t.Context(), server.URL, "fake-inference-secret", requested)
+			if err == nil || !strings.Contains(err.Error(), test.diagnostic) || calls.Load() != 2 {
+				t.Fatalf("invalid completion model was not rejected after generation: %v", err)
+			}
+			if strings.Contains(err.Error(), "fake-inference-secret") || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), configured) || strings.Contains(err.Error(), "unrelated-model") {
+				t.Fatal("completion model error exposed credentials or response details")
+			}
+		})
+	}
+}
+
 func TestCheckInferenceRejectsUnusableResponses(t *testing.T) {
 	for _, test := range []struct {
 		name, models, completion, diagnostic string
 	}{
 		{"missing model", `{"data":[{"id":"different-model"}]}`, validCompletion, "requested model"},
 		{"malformed models", `{"data":`, validCompletion, "invalid JSON"},
-		{"empty generated text", `{"data":[{"id":"served-model"}]}`, `{"choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "no generated text"},
-		{"no choices", `{"data":[{"id":"served-model"}]}`, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "no generated text"},
-		{"missing usage", `{"data":[{"id":"served-model"}]}`, `{"choices":[{"message":{"content":"hello"}}]}`, "token usage"},
-		{"inconsistent usage", `{"data":[{"id":"served-model"}]}`, `{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":1}}`, "token usage"},
+		{"empty generated text", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "no generated text"},
+		{"no choices", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "no generated text"},
+		{"missing usage", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":"hello"}}]}`, "token usage"},
+		{"inconsistent usage", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":1}}`, "token usage"},
 		{"malformed completion", `{"data":[{"id":"served-model"}]}`, `{"secret":"fake-inference-secret"`, "invalid JSON"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

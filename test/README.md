@@ -151,14 +151,17 @@ Each case runs through the CLI binary:
    have bounded retries. Idle On-Demand inference is tested by making a request.
 3. Verify the data endpoint. Inference requires the configured model's advertised
    identity (or an explicit exact runtime alias), then sends a real chat-completion
-   request, requiring generated text and valid token usage.
+   request, requiring the returned model to match the selected identity, generated
+   text, and valid token usage.
    PostgreSQL creates a uniquely named table and commits a marker using
    parameterized SQL.
-4. Run the supported update, require the reported target values, and poll
-   readiness again. A timestamp or updating status alone cannot prove an applied
-   update. Reconnect to PostgreSQL and read the same
-   committed marker; repeat inference after its replica update. When parameter
-   overrides are supplied, verify them with `current_setting`.
+4. Compare the requested update with the effective initial deployment settings
+   and reject an update that changes no value. Run the supported update, require
+   the reported target values, and poll readiness again. A timestamp or updating
+   status alone cannot prove an applied update. Reconnect to PostgreSQL and read
+   the same committed marker; repeat inference after its replica update. When parameter
+   overrides are supplied, verify them with `current_setting`, including resetting
+   keys removed by a replacement parameter set.
 5. Remove the SQL checkpoint, request deployment deletion, and confirm both
    describe deletion/not-found and absence from list. Hiding a still-deleting
    deployment from list alone cannot pass this check.
@@ -196,7 +199,9 @@ The workflow also accepts `NISTRO_CANARY_MODEL`, `NISTRO_CANARY_LOCATION`, and
 override when the runtime advertises another alias.
 
 Create overrides merge with generated defaults. Update overrides replace the
-default update and must change at least one setting. Supply each override as
+default update and must change at least one effective setting, including values
+injected by the CLI or platform. Equivalent PostgreSQL units such as `32MB` and
+`32768kB` do not count as a change. Supply each override as
 one JSON object in its optional environment secret:
 
 | GitHub secret / local environment variable | Example override |
@@ -208,6 +213,15 @@ one JSON object in its optional environment secret:
 | `NISTRO_CANARY_INFERENCE_ON_DEMAND_CREATE_CONFIG` | `{"model_url":"Qwen/Qwen2.5-0.5B-Instruct","max_model_len":2048}` |
 | `NISTRO_CANARY_INFERENCE_SCALE_CREATE_CONFIG` | `{"cloud":"aws","region":"us-east-1","instance_type":"<available SKU>"}` |
 | `NISTRO_CANARY_INFERENCE_SCALE_UPDATE_CONFIG` | `{"replicas":2}` |
+
+PostgreSQL `parameters` updates replace the custom parameter set. Omitting this
+field leaves parameters unchanged; supplying `{}` removes the custom set. When
+both create parameters and a replacement update are configured, the canary first
+creates with platform defaults and records the relevant SQL settings. It then
+applies and verifies the requested initial custom parameters through a setup
+update before testing the replacement. This supplies trusted reset expectations
+for removed keys instead of assuming built-in PostgreSQL defaults. The SQL
+checkpoint remains present throughout these updates.
 
 Generated configuration files are owner-readable and never printed. Inference
 uses the documented `/openai/v1` API base path and HTTPS, allowing HTTP only for

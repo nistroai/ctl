@@ -38,6 +38,12 @@ type canaryFixture struct {
 	describes, deleteDescribes, modelRequests, completions int
 	events                                                 []string
 	beforeUpdate, beforeDelete                             func()
+	bootstrapParameters                                    bool
+	updates                                                int
+	observed                                               map[string]any
+	applyUpdate                                            func(map[string]any, int)
+	applyCreate                                            func(map[string]any)
+	matchingCompletions                                    int
 }
 
 func (f *canaryFixture) record(event string) {
@@ -104,6 +110,17 @@ func (f *canaryFixture) control(w http.ResponseWriter, r *http.Request) {
 		} else if body["database_password"] != f.c.create["database_password"] || body["database_username"] != f.c.create["database_username"] || body["database_name"] != f.c.create["database_name"] {
 			f.t.Error("Postgres create did not preserve unique connection credentials")
 		}
+		if f.c.product == "postgres" {
+			if body["postgres_version"] != "ghcr.io/cloudnative-pg/postgresql:18" {
+				f.t.Error("Postgres create did not apply the CLI version default")
+			}
+			if _, supplied := body["parameters"]; supplied && f.bootstrapParameters {
+				f.t.Error("custom parameters were applied before capturing the platform baseline")
+			}
+			if f.applyCreate != nil {
+				f.applyCreate(body)
+			}
+		}
 		if f.mode == "reused-id" {
 			write(map[string]any{"deployment": map[string]any{"id": "preexisting-deployment", "status": "running"}})
 			return
@@ -148,7 +165,7 @@ func (f *canaryFixture) control(w http.ResponseWriter, r *http.Request) {
 			if f.mode == "wrong-model" {
 				resource["model_url"] = "Wrong/Model"
 			}
-			if f.c.tier == "scale" && f.mode != "timestamp-update" && f.mode != "missing-update-fields" {
+			if f.c.tier == "scale" && f.mode != "missing-baseline" && (!f.updated || f.mode != "timestamp-update" && f.mode != "missing-update-fields") {
 				replicas := 1
 				if f.updated && f.mode != "ignored-update" {
 					replicas = 2
@@ -159,18 +176,26 @@ func (f *canaryFixture) control(w http.ResponseWriter, r *http.Request) {
 			resource["writer_endpoint_url"] = f.endpoint
 			resource["database_name"], resource["database_username"] = f.c.create["database_name"], f.c.create["database_username"]
 			resource["storage_gib"] = f.c.create["storage_gib"]
+			resource["postgres_version"] = "ghcr.io/cloudnative-pg/postgresql:18"
+			if value, exists := f.c.create["vcpu"]; exists {
+				resource["vcpu"] = value
+			}
 			if f.c.tier == "scale" {
 				resource["replicas"] = 1
 			}
-			if f.updated {
-				for key, value := range f.c.update {
-					resource[key] = value
+			if !f.bootstrapParameters {
+				if value, exists := f.c.create["parameters"]; exists {
+					resource["parameters"] = value
 				}
+			}
+			for key, value := range f.observed {
+				resource[key] = value
 			}
 		}
 		write(map[string]any{"deployment": resource})
 	case r.Method == "PATCH" && r.URL.Path == path+"/"+f.id:
 		f.events = append(f.events, "update")
+		f.updates++
 		if f.beforeUpdate != nil {
 			f.beforeUpdate()
 		}
@@ -183,10 +208,26 @@ func (f *canaryFixture) control(w http.ResponseWriter, r *http.Request) {
 				f.t.Error("update did not change inference fixed replica counts")
 			}
 		} else {
-			for key, want := range f.c.update {
+			expected := f.c.update
+			if f.bootstrapParameters && f.updates == 1 {
+				expected = map[string]any{"parameters": f.c.create["parameters"]}
+			}
+			for key, want := range expected {
 				if !canaryEqual(body[key], want) {
 					f.t.Errorf("Postgres update changed the wrong %s value", key)
 				}
+			}
+			if len(body) != len(expected) {
+				f.t.Error("Postgres update included unexpected fields")
+			}
+			if f.applyUpdate != nil {
+				f.applyUpdate(body, f.updates)
+			}
+			if f.observed == nil {
+				f.observed = map[string]any{}
+			}
+			for key, value := range body {
+				f.observed[key] = value
 			}
 		}
 		f.updated, f.describes = true, 0
@@ -234,7 +275,14 @@ func (f *canaryFixture) inference(w http.ResponseWriter, r *http.Request) {
 		if json.NewDecoder(r.Body).Decode(&body) != nil || body["model"] != f.c.create["model_url"] || body["stream"] != false {
 			f.t.Error("canary did not generate a real nonstreaming model completion")
 		}
+		completionModel := body["model"]
+		if f.mode == "wrong-completion-before" || f.mode == "wrong-completion-after" && f.updated {
+			completionModel = "Unrelated/Other-Model"
+		} else {
+			f.matchingCompletions++
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   completionModel,
 			"choices": []any{map[string]any{"message": map[string]string{"content": "Hello."}}},
 			"usage":   map[string]int{"prompt_tokens": 6, "completion_tokens": 2, "total_tokens": 8},
 		})
@@ -282,6 +330,9 @@ func TestCanaryLocalInferenceLifecycle(t *testing.T) {
 		{"ignored update is rejected and cleaned", "scale", "ignored-update", "updated readiness"},
 		{"missing update fields and rollout is rejected", "scale", "missing-update-fields", "actual desired update values"},
 		{"wrong model identity is rejected", "scale", "wrong-model", "configured model"},
+		{"unknown effective baseline is rejected before update", "scale", "missing-baseline", "effective pre-update value"},
+		{"wrong completion model before update is rejected", "scale", "wrong-completion-before", "completion did not report the requested model"},
+		{"wrong completion model after update is rejected", "scale", "wrong-completion-after", "completion did not report the requested model"},
 		{"preexisting ID is never deleted", "scale", "reused-id", "preexisting"},
 	} {
 		var fixture *canaryFixture
@@ -294,7 +345,7 @@ func TestCanaryLocalInferenceLifecycle(t *testing.T) {
 			t.Cleanup(control.Close)
 			cli := testutils.New(t, testutils.Options{Binary: binary, Server: control.URL, Token: "fixture-control-token", Timeout: 5 * time.Second})
 			timing := canaryTiming{lifecycle: 15 * time.Second, cleanup: 5 * time.Second, poll: 10 * time.Millisecond, probe: time.Second}
-			if tc.mode == "never-ready" || tc.mode == "ignored-update" || tc.mode == "missing-update-fields" || tc.mode == "timestamp-update" || tc.mode == "wrong-model" {
+			if tc.mode == "never-ready" || tc.mode == "ignored-update" || tc.mode == "missing-update-fields" || tc.mode == "timestamp-update" || tc.mode == "wrong-model" || strings.HasPrefix(tc.mode, "wrong-completion-") {
 				timing.lifecycle = 5 * time.Second
 			}
 			err := runCanaryLifecycle(t, cli, fixture.c, timing)
@@ -334,6 +385,15 @@ func TestCanaryLocalInferenceLifecycle(t *testing.T) {
 			if updates != 1 || fixture.completions != 1 {
 				t.Fatal("update rejection fixture did not first establish initial data-plane readiness and execute PATCH")
 			}
+		}
+		if tc.mode == "wrong-completion-before" && (fixture.updates != 0 || fixture.matchingCompletions != 0 || fixture.completions == 0) {
+			t.Fatal("initial completion-model failure did not reject the data plane before PATCH")
+		}
+		if tc.mode == "missing-baseline" && (fixture.updates != 0 || fixture.matchingCompletions != 1) {
+			t.Fatal("unknown baseline was not rejected after initial readiness and before PATCH")
+		}
+		if tc.mode == "wrong-completion-after" && (fixture.updates != 1 || fixture.matchingCompletions != 1 || fixture.completions <= 1) {
+			t.Fatal("updated completion-model failure did not establish initial serving and execute PATCH")
 		}
 		if tc.wantError == "" {
 			wantCompletions := 1
@@ -389,6 +449,9 @@ func TestCanaryLocalPostgresLifecycle(t *testing.T) {
 			}
 		})
 	}
+	t.Run("effective transitions and parameter replacement", func(t *testing.T) {
+		testLocalPostgresTransitions(t, binary)
+	})
 }
 
 func TestCanaryCreateOutputErrorCleansOwnedID(t *testing.T) {
