@@ -1,8 +1,62 @@
-# nistro
+# Nistro CLI
 
-CLI for Nistro inference and Postgres deployments.
+[![Build](https://github.com/nistroai/ctl/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/nistroai/ctl/actions/workflows/build.yml)
+[![Package](https://github.com/nistroai/ctl/actions/workflows/package.yml/badge.svg?branch=main)](https://github.com/nistroai/ctl/actions/workflows/package.yml)
+[![Grype Image Scan](https://github.com/nistroai/ctl/actions/workflows/grype-scan.yml/badge.svg)](https://github.com/nistroai/ctl/actions/workflows/grype-scan.yml)
+[![Release](https://github.com/nistroai/ctl/actions/workflows/release.yml/badge.svg)](https://github.com/nistroai/ctl/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/nistroai/ctl)](https://github.com/nistroai/ctl/releases/latest)
 
-Build and run the local binary (requires Go 1.24.2 or newer):
+Nistro CLI manages Nistro inference and PostgreSQL deployments from a terminal
+or automation workflow. It supports interactive authentication, JSON output,
+configuration files, and non-interactive credentials for CI environments.
+
+## Install
+
+The installer detects the operating system and CPU architecture, downloads the
+matching release archive, verifies its SHA-256 checksum, and installs `nistro`
+under `~/.nistro/bin`.
+
+| Platform | Architectures |
+| --- | --- |
+| Linux | AMD64, ARM64 |
+| macOS | Intel, Apple silicon |
+| Windows with Git Bash | AMD64, ARM64 |
+
+Install the latest stable release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh
+```
+
+Install a specific release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -s -- --version v0.1.0
+```
+
+The installer is validated on native Linux AMD64, Linux ARM64, macOS, and
+Windows runners. Use `--install-dir` to choose another destination or
+`--no-modify-path` to leave shell profiles unchanged.
+
+## Container image
+
+Stable releases publish a signed Linux AMD64/ARM64 image to GitHub Container
+Registry:
+
+```bash
+docker pull ghcr.io/nistroai/ctl:latest
+docker run --rm ghcr.io/nistroai/ctl:latest --help
+```
+
+Use an immutable release version in production automation:
+
+```bash
+docker run --rm ghcr.io/nistroai/ctl:0.1.0 --version
+```
+
+## Development
+
+Build and run the local binary with Go 1.27.3 or newer:
 
 ```bash
 make build
@@ -12,26 +66,33 @@ make build
 The binary is written to `dist/nistro-<os>-<arch>` (`.exe` on Windows).
 Override the target platform with, for example, `make build GOOS=linux GOARCH=amd64`.
 
-Install the latest published release on macOS, Linux, or Windows (Git Bash):
+Pull requests and merge-queue checks targeting `main` run linting, dependency
+verification, unit tests, and build the CLI for Linux, macOS, and Windows on
+AMD64 and ARM64.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh
-```
+Every successful merge to `main` runs the Build workflow and then creates the
+next semantic-version tag. The default version bump is a patch; include
+`#minor` or `#major` in the merge commit message for a larger bump.
 
-The installer verifies the release checksum and places `nistro` in
-`~/.nistro/bin`. Install a specific release with:
+## Release process
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nistroai/ctl/main/install.sh | sh -s -- --version v0.1.0
-```
+Releases are controlled through GitHub draft releases. After CI creates a new
+version tag:
 
-Pull requests and merge-queue checks targeting `main` run `go test ./...` and
-build the CLI for Linux, macOS, and Windows on AMD64 and ARM64.
+1. Open the repository's **Releases** page and choose **Draft a new release**.
+2. Select the generated version tag and prepare the customer-facing title and
+   release notes.
+3. Keep the release as a draft until it is approved and ready for customers.
+4. Publish the draft to start the Release workflow.
 
-Merges to `main` automatically create the next semantic-version tag and publish
-archives for Linux, macOS, and Windows on AMD64 and ARM64. The default version
-bump is a patch; include `#minor` or `#major` in the merge commit message for a
-larger bump. A manually pushed `v*` tag also publishes a release:
+Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
+and ARM64, generates `SHA256SUMS`, validates the installer, publishes a signed
+multi-architecture image to GHCR, and runs container E2E tests. A stable release
+is explicitly marked as the latest release; prereleases are not.
+
+Creating the draft does not start publication, so maintainers retain control
+over when customer-facing artifacts become available. Tags can also be created
+manually when necessary:
 
 ```bash
 git tag v0.1.0

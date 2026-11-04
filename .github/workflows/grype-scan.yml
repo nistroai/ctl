@@ -1,0 +1,97 @@
+name: Grype Image Scan
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  SCAN_IMAGE_NAME: localbuild/nistro-ctl
+  SCAN_PLATFORM: linux/amd64
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  grype-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image for scan
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./build/Dockerfile
+          platforms: ${{ env.SCAN_PLATFORM }}
+          push: false
+          load: true
+          tags: ${{ env.SCAN_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha,scope=grype-scan-amd64
+          cache-to: type=gha,mode=max,scope=grype-scan-amd64
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            GIT_VERSION=${{ github.ref_name }}
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org
+      - name: Scan image for vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ env.SCAN_IMAGE_NAME }}:${{ github.sha }}
+          fail-build: false
+          severity-cutoff: high
+          output-format: json
+          output-file: grype-results.json
+      - name: Generate HTML vulnerability report
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const report = fs.existsSync("grype-results.json")
+            ? JSON.parse(fs.readFileSync("grype-results.json", "utf8"))
+            : { matches: [] };
+          const matches = Array.isArray(report.matches) ? report.matches : [];
+          const escape = (value) => String(value ?? "")
+            .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+          const rows = matches.map((match) => {
+            const vulnerability = match.vulnerability || {};
+            const artifact = match.artifact || {};
+            const fixes = vulnerability.fix?.versions?.join(", ") || "No fix reported";
+            return `<tr><td>${escape(vulnerability.severity)}</td><td>${escape(vulnerability.id)}</td><td>${escape(artifact.name)}</td><td>${escape(artifact.version)}</td><td>${escape(fixes)}</td></tr>`;
+          }).join("\n");
+          fs.writeFileSync("grype-results.html", `<!doctype html><html><head><meta charset="utf-8"><title>Nistro Grype Report</title><style>body{font-family:sans-serif;margin:2rem}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:.5rem;text-align:left}th{background:#f4f4f4}</style></head><body><h1>Nistro Grype Report</h1><p>${matches.length} vulnerabilities reported.</p><table><thead><tr><th>Severity</th><th>ID</th><th>Package</th><th>Version</th><th>Fix</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+          NODE
+      - name: Upload vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grype-vulnerability-report
+          path: |
+            grype-results.html
+            grype-results.json
+          if-no-files-found: ignore
+      - name: Enforce vulnerability threshold
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const report = JSON.parse(fs.readFileSync("grype-results.json", "utf8"));
+          const matches = Array.isArray(report.matches) ? report.matches : [];
+          const failing = matches.filter((match) => ["critical", "high"].includes(String(match.vulnerability?.severity || "").toLowerCase()));
+          for (const match of failing) {
+            const vulnerability = match.vulnerability || {};
+            const artifact = match.artifact || {};
+            const fixes = vulnerability.fix?.versions?.join(", ") || "no fix available";
+            console.error(`${vulnerability.severity} ${artifact.name}@${artifact.version} ${vulnerability.id} (${fixes})`);
+          }
+          if (failing.length > 0) process.exit(1);
+          console.log("No high or critical vulnerabilities found.");
+          NODE
