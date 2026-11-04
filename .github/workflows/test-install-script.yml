@@ -1,0 +1,56 @@
+name: Test Install Script
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version to install
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to install; defaults to latest
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - install.sh
+      - .github/workflows/test-install-script.yml
+
+jobs:
+  test-install-script:
+    name: Install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install and verify Nistro CLI
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/nistro-bin"
+          version_args=()
+          if [ -n "$RELEASE_VERSION" ]; then
+            version_args=(--version "$RELEASE_VERSION")
+          fi
+
+          sh ./install.sh "${version_args[@]}" --install-dir "$install_dir" --no-modify-path
+
+          case "${{ runner.os }}" in
+            Windows) binary="$install_dir/nistro.exe" ;;
+            *) binary="$install_dir/nistro" ;;
+          esac
+
+          test -x "$binary" || [ "${{ runner.os }}" = Windows ]
+          "$binary" --version
