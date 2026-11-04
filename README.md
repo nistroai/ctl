@@ -56,7 +56,7 @@ docker run --rm ghcr.io/nistroai/ctl:0.1.0 --version
 
 ## Development
 
-Build and run the local binary with Go 1.24.2 or newer:
+Build and run the local binary with Go 1.27.3 or newer:
 
 ```bash
 make build
