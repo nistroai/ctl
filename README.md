@@ -87,11 +87,20 @@ version tag:
    marks it as a prerelease while it builds and validates the artifacts.
 
 Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
-and ARM64, generates `SHA256SUMS`, validates the installer, publishes a signed
-multi-architecture image to GHCR, and runs container E2E tests. Only after every
-job succeeds does the workflow promote the GitHub release to stable and latest,
-and move the GHCR major, minor, and `latest` image aliases. If validation fails,
-the release remains a prerelease and the stable aliases are unchanged.
+and ARM64, generates `SHA256SUMS`, validates the installer and binary contracts,
+publishes a signed multi-architecture image to GHCR, and runs container E2E
+tests. Only after these checks succeed does the workflow promote the GitHub
+release to stable and latest, and move the GHCR major, minor, and `latest` image
+aliases. If validation fails, the release remains a prerelease and the stable
+aliases are unchanged.
+
+After promotion, stable version tags run authenticated production smoke tests
+and all four deployment lifecycle canaries, including real inference requests
+and PostgreSQL queries. A canary failure marks the workflow failed; the promoted
+release remains available. See [the test framework guide](test/README.md) for
+coverage, local commands, GitHub secrets, and workflow integration.
+Run `make test-readme` to execute the documented CLI examples and configuration
+checks against a local test API using the real binary.
 
 Creating the draft does not start publication, so maintainers retain control
 over when customer-facing artifacts become available. Tags can also be created

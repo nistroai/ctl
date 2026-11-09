@@ -34,6 +34,7 @@ jobs:
     outputs:
       ref: ${{ steps.release.outputs.ref }}
       version: ${{ steps.release.outputs.version }}
+      stable: ${{ steps.release.outputs.stable }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +57,13 @@ jobs:
           release_ref=$(git rev-parse "refs/tags/$VERSION^{commit}")
           echo "ref=$release_ref" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Build metadata may contain hyphens without making a tag a prerelease.
+          version_without_metadata="${VERSION%%+*}"
+          if [[ "$version_without_metadata" == *-* ]]; then
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          fi
 
   test:
     needs: prepare
@@ -68,7 +76,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go test ./...
+      - run: go test -count=1 -timeout 10m ./...
 
   build:
     needs: [prepare, test]
@@ -144,6 +152,57 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
     permissions:
       contents: read
+
+  verify-installer:
+    needs: [prepare, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install released CLI
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/nistro-bin"
+          sh install.sh --version "$RELEASE_VERSION" --install-dir "$install_dir" --no-modify-path
+          if [ "${{ runner.os }}" = Windows ]; then
+            binary="$install_dir/nistro.exe"
+          else
+            binary="$install_dir/nistro"
+          fi
+          if [ "${{ runner.os }}" = Windows ]; then
+            echo "NISTRO_TEST_BINARY=$(cygpath -w "$binary")" >> "$GITHUB_ENV"
+          else
+            echo "NISTRO_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+          fi
+          "$binary" --version
+      - name: Test released binary
+        env:
+          NISTRO_TEST_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -json -count=1 -timeout 10m ./test/integration_test/... | tee binary-results.json
+      - name: Upload binary test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-binary-results-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-results.json
+          if-no-files-found: warn
+          retention-days: 14
 
   release-package-multi-arch:
     name: Build image ${{ matrix.platform }}
@@ -303,6 +362,7 @@ jobs:
     needs:
       - prepare
       - test-install-script
+      - verify-installer
       - release-package-multi-arch-merge
       - docker-e2e-test
     runs-on: ubuntu-latest
@@ -341,3 +401,16 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
+
+  # Call directly after promotion: releases updated with GITHUB_TOKEN do not
+  # trigger another workflow listening for release: published events.
+  smoke-tests:
+    needs: [prepare, promote-release]
+    if: needs.prepare.outputs.stable == 'true'
+    uses: ./.github/workflows/smoke-tests.yml
+    with:
+      environment: production
+      cli-version: ${{ needs.prepare.outputs.version }}
+      server: ${{ vars.NISTRO_SERVER || 'https://api.nistro.ai' }}
+      run-canaries: true
+    secrets: inherit
