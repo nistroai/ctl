@@ -225,6 +225,11 @@ update before testing the replacement. This supplies trusted reset expectations
 for removed keys instead of assuming built-in PostgreSQL defaults. The SQL
 checkpoint remains present throughout these updates.
 
+Setting comparisons accept equivalent units and scientific notation. Integers
+compare exactly; real values allow a `1e-9` relative rounding tolerance without
+an absolute minimum. Zero only matches zero, so tiny parameter changes remain
+detectable both before and after an update.
+
 Generated configuration files are owner-readable and never printed. Inference
 uses the documented `/openai/v1` API base path and HTTPS, allowing HTTP only for
 loopback test fixtures. PostgreSQL verifies TLS certificates and hostnames with

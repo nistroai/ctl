@@ -93,6 +93,34 @@ func TestPostgresSettingsScientificNotation(t *testing.T) {
 	}
 }
 
+func TestPostgresRealSettingsRelativeTolerance(t *testing.T) {
+	for _, test := range []struct {
+		name, actual, unit, requested string
+		matches                       bool
+	}{
+		{"distinct tiny values", "1e-10", "", "2e-10", false},
+		{"zero differs from tiny value", "0", "", "1e-10", false},
+		{"tiny value differs from zero", "1e-10", "", "0", false},
+		{"equivalent zero representations", "0.000", "", "0e-10", true},
+		{"tiny relative rounding", "1.0000000001e-10", "", "1e-10", true},
+		{"tiny rounding exceeds tolerance", "1.000000002e-10", "", "1e-10", false},
+		{"negative tiny relative rounding", "-1.0000000001e-10", "", "-1e-10", true},
+		{"distinct negative tiny values", "-1e-10", "", "-2e-10", false},
+		{"equivalent tiny time units", "1e-7", "ms", "1e-10s", true},
+		{"distinct normalized tiny values", "1e-7", "ms", "2e-10s", false},
+		{"zero differs below float range", "0", "", "1e-400", false},
+		{"distinct values below float range", "1e-400", "", "2e-400", false},
+		{"relative rounding below float range", "1.0000000001e-400", "", "1e-400", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setting := PostgresSetting{Value: test.actual, Unit: test.unit, Kind: "real"}
+			if got := PostgresSettingMatches(setting, test.requested); got != test.matches {
+				t.Fatalf("relative snapshot match = %v, want %v", got, test.matches)
+			}
+		})
+	}
+}
+
 func TestReadPostgresSettingsEmptyDoesNotConnect(t *testing.T) {
 	settings, err := ReadPostgresSettings(t.Context(), "invalid connection", nil)
 	if err != nil || settings == nil || len(settings) != 0 {

@@ -3,7 +3,6 @@ package canaryutils
 import (
 	"context"
 	"errors"
-	"math"
 	"math/big"
 	"regexp"
 	"sort"
@@ -63,7 +62,7 @@ func ReadPostgresSettings(ctx context.Context, connectionString string, names []
 // PostgresSettingMatches compares a snapshot with a requested value, accepting
 // equivalent PostgreSQL byte/time units, scientific notation, and boolean
 // aliases. Integer values compare exactly after normalization; real values
-// allow rounding tolerance.
+// allow magnitude-relative rounding tolerance without an absolute floor.
 func PostgresSettingMatches(setting PostgresSetting, requested string) bool {
 	return matchingPostgresSetting(setting.Value, requested, setting.Unit, setting.Kind)
 }
@@ -111,9 +110,16 @@ func matchingPostgresSetting(actual, requested, unit, kind string) bool {
 	if kind == "integer" {
 		return a.Cmp(b) == 0
 	}
-	first, _ := a.Float64()
-	second, _ := b.Float64()
-	return !math.IsInf(first, 0) && !math.IsInf(second, 0) && math.Abs(first-second) <= math.Max(1, math.Max(math.Abs(first), math.Abs(second)))*1e-9
+	// Keep the 1e-9 tolerance relative even below float64's range. Zero only
+	// matches zero, and no absolute floor can hide a small setting transition.
+	difference := new(big.Rat).Sub(a, b)
+	difference.Abs(difference)
+	magnitude := new(big.Rat).Abs(a)
+	if other := new(big.Rat).Abs(b); other.Cmp(magnitude) > 0 {
+		magnitude = other
+	}
+	tolerance := magnitude.Quo(magnitude, big.NewRat(1_000_000_000, 1))
+	return difference.Cmp(tolerance) <= 0
 }
 
 var settingQuantity = regexp.MustCompile(`^([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]*)$`)
