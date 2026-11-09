@@ -231,6 +231,7 @@ func TestCheckInferenceRejectsInvalidCompletionModel(t *testing.T) {
 }
 
 func TestCheckInferenceRejectsUnusableResponses(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
 	for _, test := range []struct {
 		name, models, completion, diagnostic string
 	}{
@@ -240,6 +241,9 @@ func TestCheckInferenceRejectsUnusableResponses(t *testing.T) {
 		{"no choices", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "no generated text"},
 		{"missing usage", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":"hello"}}]}`, "token usage"},
 		{"inconsistent usage", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":1}}`, "token usage"},
+		{"oversized total", `{"data":[{"id":"served-model"}]}`, `{"model":"served-model","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":8}}`, "token usage"},
+		{"overflowing usage", `{"data":[{"id":"served-model"}]}`, fmt.Sprintf(`{"model":"served-model","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":%d,"completion_tokens":1,"total_tokens":%d}}`, maxInt, maxInt), "token usage"},
+		{"wrapped total", `{"data":[{"id":"served-model"}]}`, fmt.Sprintf(`{"model":"served-model","choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":%d,"completion_tokens":1,"total_tokens":%d}}`, maxInt, -maxInt-1), "token usage"},
 		{"malformed completion", `{"data":[{"id":"served-model"}]}`, `{"secret":"fake-inference-secret"`, "invalid JSON"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

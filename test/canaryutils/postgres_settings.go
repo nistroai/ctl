@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/big"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +61,8 @@ func ReadPostgresSettings(ctx context.Context, connectionString string, names []
 }
 
 // PostgresSettingMatches compares a snapshot with a requested value, accepting
-// equivalent PostgreSQL byte/time units and boolean aliases.
+// equivalent PostgreSQL byte/time units and boolean aliases. Integer values
+// compare exactly after normalization; real values allow rounding tolerance.
 func PostgresSettingMatches(setting PostgresSetting, requested string) bool {
 	return matchingPostgresSetting(setting.Value, requested, setting.Unit, setting.Kind)
 }
@@ -103,19 +104,29 @@ func matchingPostgresSetting(actual, requested, unit, kind string) bool {
 	}
 	a, categoryA, validA := postgresQuantity(actual, unit)
 	b, categoryB, validB := postgresQuantity(requested, unit)
-	return validA && validB && categoryA == categoryB && math.Abs(a-b) <= math.Max(1, math.Max(math.Abs(a), math.Abs(b)))*1e-9
+	if !validA || !validB || categoryA != categoryB {
+		return false
+	}
+	if kind == "integer" {
+		return a.Cmp(b) == 0
+	}
+	first, _ := a.Float64()
+	second, _ := b.Float64()
+	return !math.IsInf(first, 0) && !math.IsInf(second, 0) && math.Abs(first-second) <= math.Max(1, math.Max(math.Abs(first), math.Abs(second)))*1e-9
 }
 
 var settingQuantity = regexp.MustCompile(`^([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*([A-Za-z]*)$`)
 
-func postgresQuantity(value, defaultUnit string) (float64, string, bool) {
+// Rational normalization preserves adjacent integers even when applying a unit
+// multiplier produces values beyond float64's exact integer range.
+func postgresQuantity(value, defaultUnit string) (*big.Rat, string, bool) {
 	match := settingQuantity.FindStringSubmatch(value)
 	if match == nil {
-		return 0, "", false
+		return nil, "", false
 	}
-	number, err := strconv.ParseFloat(match[1], 64)
-	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, "", false
+	number, valid := new(big.Rat).SetString(match[1])
+	if !valid {
+		return nil, "", false
 	}
 	unit := match[2]
 	if unit == "" && defaultUnit != "" {
@@ -125,17 +136,24 @@ func postgresQuantity(value, defaultUnit string) (float64, string, bool) {
 			base = "1" + base
 		}
 		factor, category, valid := postgresQuantity(base, "")
-		return number * factor, category, valid
+		if !valid {
+			return nil, "", false
+		}
+		return number.Mul(number, factor), category, true
 	}
 	type quantityUnit struct {
-		factor   float64
-		category string
+		numerator, denominator int64
+		category               string
 	}
 	units := map[string]quantityUnit{
-		"": {1, "number"}, "b": {1, "bytes"}, "kb": {1024, "bytes"}, "mb": {1024 * 1024, "bytes"},
-		"gb": {1024 * 1024 * 1024, "bytes"}, "tb": {1024 * 1024 * 1024 * 1024, "bytes"},
-		"us": {0.000001, "seconds"}, "ms": {0.001, "seconds"}, "s": {1, "seconds"}, "min": {60, "seconds"}, "h": {3600, "seconds"}, "d": {86400, "seconds"},
+		"": {1, 1, "number"}, "b": {1, 1, "bytes"}, "kb": {1024, 1, "bytes"}, "mb": {1024 * 1024, 1, "bytes"},
+		"gb": {1024 * 1024 * 1024, 1, "bytes"}, "tb": {1024 * 1024 * 1024 * 1024, 1, "bytes"},
+		"us": {1, 1000000, "seconds"}, "ms": {1, 1000, "seconds"}, "s": {1, 1, "seconds"}, "min": {60, 1, "seconds"}, "h": {3600, 1, "seconds"}, "d": {86400, 1, "seconds"},
 	}
 	scale, exists := units[strings.ToLower(unit)]
-	return number * scale.factor, scale.category, exists
+	if !exists {
+		return nil, "", false
+	}
+	factor := new(big.Rat).SetFrac64(scale.numerator, scale.denominator)
+	return number.Mul(number, factor), scale.category, true
 }

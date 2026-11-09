@@ -29,6 +29,9 @@ func testLocalPostgresTransitions(t *testing.T, binary string) {
 		{name: "reported version transition is verified", update: map[string]any{"postgres_version": "ghcr.io/cloudnative-pg/postgresql:19"}, patches: 1},
 		{name: "empty default parameter set is rejected before PATCH", replacement: map[string]string{}, wantError: "does not change effective pre-update values"},
 		{name: "custom create parameters are verified", initial: map[string]string{"work_mem": "32MB"}, update: map[string]any{"replicas": 2}, patches: 1},
+		{name: "search path update preserves and cleans the checkpoint", replacement: map[string]string{"search_path": "pg_catalog"}, patches: 1},
+		{name: "adjacent large integer values are a transition", initial: map[string]string{"vacuum_failsafe_age": "1600000000"}, replacement: map[string]string{"vacuum_failsafe_age": "1600000001"}, patches: 2},
+		{name: "ignored large integer change fails despite replica update", mode: "ignored-replacement", initial: map[string]string{"vacuum_failsafe_age": "1600000000"}, replacement: map[string]string{"vacuum_failsafe_age": "1600000001"}, update: map[string]any{"replicas": 2}, wantError: "configured setting did not match its requested value", patches: 2},
 		{name: "ignored custom create parameters fail before PATCH", mode: "ignored-create", initial: map[string]string{"work_mem": "32MB"}, update: map[string]any{"replicas": 2}, wantError: "initial readiness/data plane"},
 		{name: "subset replacement restores removed setting", initial: custom, replacement: map[string]string{"work_mem": "64MB"}, patches: 2},
 		{name: "retained value with removed setting is a transition", initial: custom, replacement: map[string]string{"work_mem": "32MB"}, patches: 2},
@@ -48,6 +51,9 @@ func testLocalPostgresTransitions(t *testing.T, binary string) {
 			c.update = tc.update
 			if tc.replacement != nil {
 				c.update = map[string]any{"parameters": tc.replacement}
+				for key, value := range tc.update {
+					c.update[key] = value
+				}
 			}
 			endpoint := localCanaryPostgres(t, &c)
 			uri, err := canaryPostgresConnection(map[string]any{"writer_endpoint_url": endpoint}, c.create)
@@ -68,6 +74,16 @@ func testLocalPostgresTransitions(t *testing.T, binary string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				statement := "ALTER DATABASE " + pgx.Identifier{database}.Sanitize() + " SET " + pgx.Identifier{name}.Sanitize() + " TO '" + strings.ReplaceAll(value, "'", "''") + "'"
+				if name == "search_path" {
+					// Preserve GUC list syntax instead of quoting the entire
+					// comma-separated value as a single schema identifier.
+					var observed string
+					if err := connection.QueryRow(ctx, "SELECT pg_catalog.set_config($1, $2, false)", name, value).Scan(&observed); err != nil {
+						t.Error("apply local PostgreSQL search path")
+						return
+					}
+					statement = "ALTER DATABASE " + pgx.Identifier{database}.Sanitize() + " SET search_path FROM CURRENT"
+				}
 				if _, err := connection.Exec(ctx, statement); err != nil {
 					t.Error("apply local PostgreSQL setting")
 				}

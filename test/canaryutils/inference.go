@@ -102,7 +102,9 @@ func checkInference(ctx context.Context, baseURL, apiKey, model string, exactOnl
 	if len(completion.Choices) == 0 || strings.TrimSpace(completion.Choices[0].Message.Content) == "" {
 		return errors.New("Inference canary returned no generated text")
 	}
-	if completion.Usage.PromptTokens <= 0 || completion.Usage.CompletionTokens <= 0 || completion.Usage.TotalTokens < completion.Usage.PromptTokens+completion.Usage.CompletionTokens {
+	usage := completion.Usage
+	// Subtract positive counts so validating their sum cannot overflow an int.
+	if usage.PromptTokens <= 0 || usage.CompletionTokens <= 0 || usage.TotalTokens <= 0 || usage.TotalTokens-usage.PromptTokens != usage.CompletionTokens {
 		return errors.New("Inference canary returned missing or invalid token usage")
 	}
 	return nil

@@ -2,7 +2,9 @@ package canaryutils
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/url"
@@ -129,6 +131,98 @@ func TestPostgresCheckpointLocalDatabase(t *testing.T) {
 	if err := connection.QueryRow(t.Context(), "SELECT count(*) FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE 'nistro\\_canary\\_%'").Scan(&leftovers); err != nil || leftovers != 0 {
 		t.Fatal("database probe left canary tables behind")
 	}
+	t.Run("database search_path update preserves checkpoint", func(t *testing.T) {
+		var initialPath string
+		if err := connection.QueryRow(t.Context(), "SELECT current_setting('search_path')").Scan(&initialPath); err != nil {
+			t.Fatal(postgresError("test initial search path", err))
+		}
+		initialURI := postgresFixtureSearchPath(uri, initialPath)
+		checkpoint, err := NewPostgresCheckpoint(t.Context(), initialURI, "search-path-marker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer checkpoint.Cleanup(context.Background(), initialURI)
+		database := pgx.Identifier{config.Database}.Sanitize()
+		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" SET search_path FROM CURRENT")
+		if _, err := connection.Exec(t.Context(), "ALTER DATABASE "+database+" SET search_path TO pg_catalog"); err != nil {
+			t.Fatal(postgresError("test search path update", err))
+		}
+		// Force a fresh connection to use the changed server configuration,
+		// regardless of an initial search_path query parameter in the fixture URL.
+		updated, _ := url.Parse(uri)
+		query := updated.Query()
+		query.Del("search_path")
+		updated.RawQuery = query.Encode()
+		settings, err := ReadPostgresSettings(t.Context(), updated.String(), []string{"search_path"})
+		if err != nil || settings["search_path"].Value != "pg_catalog" {
+			t.Fatal("fresh connection did not observe the updated search_path")
+		}
+		if err := checkpoint.Verify(t.Context(), updated.String()); err != nil {
+			t.Fatalf("checkpoint verification followed the changed search_path: %v", err)
+		}
+		if err := checkpoint.Cleanup(t.Context(), updated.String()); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkpoint.Verify(t.Context(), initialURI); err == nil || !strings.Contains(err.Error(), "42P01") {
+			t.Fatal("changed-search-path cleanup did not remove the original checkpoint")
+		}
+	})
+	t.Run("initial quoted schema and shadow table preserve identity", func(t *testing.T) {
+		var random [8]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			t.Fatal("generate disposable test schema names")
+		}
+		marker := hex.EncodeToString(random[:])
+		initialSchema := "canary initial \"schema " + marker
+		shadowSchema := "canary_shadow_" + marker
+		for _, schema := range []string{initialSchema, shadowSchema} {
+			identifier := pgx.Identifier{schema}.Sanitize()
+			if _, err := connection.Exec(t.Context(), "CREATE SCHEMA "+identifier); err != nil {
+				t.Fatal(postgresError("test schema creation", err))
+			}
+			defer connection.Exec(context.Background(), "DROP SCHEMA "+identifier+" CASCADE")
+		}
+		initialURI := postgresFixtureSearchPath(uri, pgx.Identifier{initialSchema}.Sanitize())
+		checkpoint, err := NewPostgresCheckpoint(t.Context(), initialURI, "initial-schema-marker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer checkpoint.Cleanup(context.Background(), initialURI)
+		initialConfig, err := verifiedPostgresConfig(initialURI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		initialConnection, err := pgx.ConnectConfig(t.Context(), initialConfig)
+		if err != nil {
+			t.Fatal(postgresError("test initial schema connect", err))
+		}
+		defer closePostgres(initialConnection)
+		var table, schema string
+		if err := initialConnection.QueryRow(t.Context(), `SELECT c.relname, n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=to_regclass($1)`, checkpoint.table).Scan(&table, &schema); err != nil || schema != initialSchema {
+			t.Fatal("checkpoint was not created in its initial intended schema")
+		}
+		shadow := pgx.Identifier{shadowSchema, table}.Sanitize()
+		if _, err := connection.Exec(t.Context(), "CREATE TABLE "+shadow+" (marker text NOT NULL)"); err != nil {
+			t.Fatal(postgresError("test shadow creation", err))
+		}
+		if _, err := connection.Exec(t.Context(), "INSERT INTO "+shadow+" VALUES ($1)", "unrelated-shadow-marker"); err != nil {
+			t.Fatal(postgresError("test shadow insert", err))
+		}
+		changedURI := postgresFixtureSearchPath(uri, pgx.Identifier{shadowSchema}.Sanitize())
+		if err := checkpoint.Verify(t.Context(), changedURI); err != nil {
+			t.Fatalf("checkpoint verification followed an unrelated shadow table: %v", err)
+		}
+		if err := checkpoint.Cleanup(t.Context(), changedURI); err != nil {
+			t.Fatal(err)
+		}
+		var shadowMarker string
+		if err := connection.QueryRow(t.Context(), "SELECT marker FROM "+shadow).Scan(&shadowMarker); err != nil || shadowMarker != "unrelated-shadow-marker" {
+			t.Fatal("checkpoint cleanup modified the unrelated shadow table")
+		}
+		if err := checkpoint.Verify(t.Context(), initialURI); err == nil || !strings.Contains(err.Error(), "42P01") {
+			t.Fatal("cleanup did not remove the checkpoint from its initial schema")
+		}
+	})
 	t.Run("configured parameters are observed", func(t *testing.T) {
 		database := pgx.Identifier{config.Database}.Sanitize()
 		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" RESET work_mem")
@@ -271,4 +365,12 @@ func TestPostgresCheckpointLocalDatabase(t *testing.T) {
 			t.Fatal("failed checkpoint creation left its table behind")
 		}
 	})
+}
+
+func postgresFixtureSearchPath(uri, path string) string {
+	parsed, _ := url.Parse(uri)
+	query := parsed.Query()
+	query.Set("search_path", path)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }

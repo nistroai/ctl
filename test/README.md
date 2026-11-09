@@ -152,9 +152,10 @@ Each case runs through the CLI binary:
 3. Verify the data endpoint. Inference requires the configured model's advertised
    identity (or an explicit exact runtime alias), then sends a real chat-completion
    request, requiring the returned model to match the selected identity, generated
-   text, and valid token usage.
-   PostgreSQL creates a uniquely named table and commits a marker using
-   parameterized SQL.
+   text, and positive token usage whose total equals prompt plus completion
+   tokens. PostgreSQL creates a uniquely named table in the initial connection's
+   schema and commits a marker using parameterized SQL. The fully qualified
+   table name remains stable across later `search_path` changes.
 4. Compare the requested update with the effective initial deployment settings
    and reject an update that changes no value. Run the supported update, require
    the reported target values, and poll readiness again. A timestamp or updating
@@ -201,8 +202,9 @@ override when the runtime advertises another alias.
 Create overrides merge with generated defaults. Update overrides replace the
 default update and must change at least one effective setting, including values
 injected by the CLI or platform. Equivalent PostgreSQL units such as `32MB` and
-`32768kB` do not count as a change. Supply each override as
-one JSON object in its optional environment secret:
+`32768kB` do not count as a change. Integer settings are compared exactly after
+unit normalization, so adjacent large values remain distinct. Supply each
+override as one JSON object in its optional environment secret:
 
 | GitHub secret / local environment variable | Example override |
 | --- | --- |

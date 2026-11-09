@@ -27,10 +27,38 @@ func TestPostgresSettingMatches(t *testing.T) {
 		{"different quantity categories", PostgresSetting{"8kB", "kB", "integer"}, "8ms", false},
 		{"invalid quantity", PostgresSetting{"32MB", "kB", "integer"}, "invalid", false},
 		{"string is not a boolean", PostgresSetting{"on", "", "string"}, "true", false},
+		{"real rounding tolerance", PostgresSetting{"1.0000000001", "", "real"}, "1", true},
+		{"real mismatch", PostgresSetting{"1.01", "", "real"}, "1", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := PostgresSettingMatches(test.setting, test.requested); got != test.matches {
 				t.Fatalf("snapshot match = %v, want %v", got, test.matches)
+			}
+		})
+	}
+}
+
+func TestPostgresIntegerSettingsRequireExactValues(t *testing.T) {
+	for _, test := range []struct {
+		name, actual, unit, requested string
+		matches                       bool
+	}{
+		{"adjacent vacuum failsafe ages", "1600000000", "", "1600000001", false},
+		{"adjacent large millisecond values", "1600000000", "ms", "1600000001ms", false},
+		{"integers beyond float precision", "9007199254740992", "", "9007199254740993", false},
+		{"large equivalent byte units", "17179869184GB", "GB", "18446744073709551616B", true},
+		{"large normalized bytes differ by one", "17179869184GB", "GB", "18446744073709551617B", false},
+		{"large equivalent time units", "1600000000", "ms", "1600000s", true},
+		{"fractional unit normalization", "1500", "ms", "1.5s", true},
+		{"fractional memory units", "1572864kB", "kB", "1.5GB", true},
+		{"subsecond unit normalization", "1", "ms", "1000us", true},
+		{"equivalent block units", "2147483647", "8kB", "17179869176kB", true},
+		{"adjacent block values", "2147483647", "8kB", "17179869177kB", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setting := PostgresSetting{Value: test.actual, Unit: test.unit, Kind: "integer"}
+			if got := PostgresSettingMatches(setting, test.requested); got != test.matches {
+				t.Fatalf("integer snapshot match = %v, want %v", got, test.matches)
 			}
 		})
 	}

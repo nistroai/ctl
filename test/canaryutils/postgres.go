@@ -19,7 +19,8 @@ import (
 
 // PostgresCheckpoint retains one committed marker across deployment updates.
 // Each operation connects independently, allowing the caller to supply refreshed
-// endpoint credentials after a rollout. No connection credentials are retained.
+// endpoint credentials after a rollout. The fully qualified table retains its
+// initial schema even when search_path changes. No credentials are retained.
 type PostgresCheckpoint struct {
 	table  string
 	marker string
@@ -40,7 +41,7 @@ func NewPostgresCheckpoint(ctx context.Context, connectionString, marker string)
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, errors.New("Postgres canary could not generate a table name")
 	}
-	pending := &PostgresCheckpoint{table: pgx.Identifier{"nistro_canary_" + hex.EncodeToString(random[:])}.Sanitize(), marker: marker}
+	table := "nistro_canary_" + hex.EncodeToString(random[:])
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	connection, err := pgx.ConnectConfig(ctx, config)
@@ -48,6 +49,14 @@ func NewPostgresCheckpoint(ctx context.Context, connectionString, marker string)
 		return nil, postgresError("connect", err)
 	}
 	defer closePostgres(connection)
+	var schema string
+	if err := connection.QueryRow(ctx, "SELECT COALESCE(current_schema(), '')").Scan(&schema); err != nil {
+		return nil, postgresError("resolve checkpoint schema", err)
+	}
+	if schema == "" {
+		return nil, errors.New("Postgres canary could not resolve its initial schema")
+	}
+	pending := &PostgresCheckpoint{table: pgx.Identifier{schema, table}.Sanitize(), marker: marker}
 	defer func() {
 		if checkpoint == nil {
 			result = errors.Join(result, pending.Cleanup(context.WithoutCancel(ctx), connectionString))
