@@ -61,8 +61,9 @@ func ReadPostgresSettings(ctx context.Context, connectionString string, names []
 }
 
 // PostgresSettingMatches compares a snapshot with a requested value, accepting
-// equivalent PostgreSQL byte/time units and boolean aliases. Integer values
-// compare exactly after normalization; real values allow rounding tolerance.
+// equivalent PostgreSQL byte/time units, scientific notation, and boolean
+// aliases. Integer values compare exactly after normalization; real values
+// allow rounding tolerance.
 func PostgresSettingMatches(setting PostgresSetting, requested string) bool {
 	return matchingPostgresSetting(setting.Value, requested, setting.Unit, setting.Kind)
 }
@@ -115,7 +116,7 @@ func matchingPostgresSetting(actual, requested, unit, kind string) bool {
 	return !math.IsInf(first, 0) && !math.IsInf(second, 0) && math.Abs(first-second) <= math.Max(1, math.Max(math.Abs(first), math.Abs(second)))*1e-9
 }
 
-var settingQuantity = regexp.MustCompile(`^([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*([A-Za-z]*)$`)
+var settingQuantity = regexp.MustCompile(`^([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]*)$`)
 
 // Rational normalization preserves adjacent integers even when applying a unit
 // multiplier produces values beyond float64's exact integer range.

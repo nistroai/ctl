@@ -64,6 +64,35 @@ func TestPostgresIntegerSettingsRequireExactValues(t *testing.T) {
 	}
 }
 
+func TestPostgresSettingsScientificNotation(t *testing.T) {
+	for _, test := range []struct {
+		name, actual, unit, kind, requested string
+		matches                             bool
+	}{
+		{"reported negative exponent", "1e-06", "", "real", "0.000001", true},
+		{"requested negative exponent", "0.000001", "", "real", "1e-06", true},
+		{"uppercase exponent", "1E-06", "", "real", "0.000001", true},
+		{"positive exponent", "1.25e+2", "", "real", "125", true},
+		{"unsigned exponent", "1.25e2", "", "real", "125", true},
+		{"signed fractional mantissa", "-.5e-2", "", "real", "-0.005", true},
+		{"trailing decimal point", "+1.e-6", "", "real", "0.000001", true},
+		{"explicit time unit", "1e-3s", "ms", "real", "1ms", true},
+		{"scientific real mismatch", "1e-06", "", "real", "0.000002", false},
+		{"exact integer beyond float precision", "9.007199254740993e15", "", "integer", "9007199254740993", true},
+		{"adjacent integer remains different", "9.007199254740993e15", "", "integer", "9007199254740992", false},
+		{"missing exponent digits", "1e", "", "real", "1", false},
+		{"missing signed exponent digits", "1e-", "", "real", "1", false},
+		{"repeated exponent", "1e-6e2", "", "real", "0.0001", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setting := PostgresSetting{Value: test.actual, Unit: test.unit, Kind: test.kind}
+			if got := PostgresSettingMatches(setting, test.requested); got != test.matches {
+				t.Fatalf("scientific snapshot match = %v, want %v", got, test.matches)
+			}
+		})
+	}
+}
+
 func TestReadPostgresSettingsEmptyDoesNotConnect(t *testing.T) {
 	settings, err := ReadPostgresSettings(t.Context(), "invalid connection", nil)
 	if err != nil || settings == nil || len(settings) != 0 {

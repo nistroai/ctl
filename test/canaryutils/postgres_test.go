@@ -228,7 +228,8 @@ func TestPostgresCheckpointLocalDatabase(t *testing.T) {
 		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" RESET work_mem")
 		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" RESET statement_timeout")
 		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" RESET synchronous_commit")
-		for _, statement := range []string{"ALTER DATABASE " + database + " SET work_mem='32MB'", "ALTER DATABASE " + database + " SET statement_timeout='1s'", "ALTER DATABASE " + database + " SET synchronous_commit='true'"} {
+		defer connection.Exec(context.Background(), "ALTER DATABASE "+database+" RESET cpu_tuple_cost")
+		for _, statement := range []string{"ALTER DATABASE " + database + " SET work_mem='32MB'", "ALTER DATABASE " + database + " SET statement_timeout='1s'", "ALTER DATABASE " + database + " SET synchronous_commit='true'", "ALTER DATABASE " + database + " SET cpu_tuple_cost='0.000001'"} {
 			if _, err := connection.Exec(t.Context(), statement); err != nil {
 				t.Fatal(postgresError("test settings setup", err))
 			}
@@ -237,7 +238,11 @@ func TestPostgresCheckpointLocalDatabase(t *testing.T) {
 		if err := connection.QueryRow(t.Context(), "SELECT setting FROM pg_settings WHERE name='shared_buffers'").Scan(&blocks); err != nil {
 			t.Fatal(postgresError("test block setting", err))
 		}
-		settings := map[string]string{"work_mem": "32768kB", "statement_timeout": "1000ms", "shared_buffers": blocks, "enable_seqscan": "true", "synchronous_commit": "true"}
+		observed, err := ReadPostgresSettings(t.Context(), uri, []string{"cpu_tuple_cost"})
+		if err != nil || observed["cpu_tuple_cost"].Kind != "real" || !strings.ContainsAny(observed["cpu_tuple_cost"].Value, "eE") {
+			t.Fatal("local PostgreSQL did not report the real setting in scientific notation")
+		}
+		settings := map[string]string{"work_mem": "32768kB", "statement_timeout": "1000ms", "shared_buffers": blocks, "enable_seqscan": "true", "synchronous_commit": "true", "cpu_tuple_cost": "0.000001"}
 		if err := CheckPostgresSettings(t.Context(), uri, settings); err != nil {
 			t.Fatal(err)
 		}
