@@ -40,11 +40,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
       - name: Resolve release version and commit
         id: release
         shell: bash
         env:
           VERSION: ${{ github.event.release.tag_name }}
+          ORIGINAL_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
 
@@ -59,7 +61,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Build metadata may contain hyphens without making a tag a prerelease.
           version_without_metadata="${VERSION%%+*}"
-          if [[ "$version_without_metadata" == *-* ]]; then
+          if [[ "$version_without_metadata" == *-* || "$ORIGINAL_PRERELEASE" == true ]]; then
             echo "stable=false" >> "$GITHUB_OUTPUT"
           else
             echo "stable=true" >> "$GITHUB_OUTPUT"
@@ -72,6 +74,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -90,6 +93,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -127,6 +131,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -136,6 +142,10 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
+      - name: Attest versioned CLI archives
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3.0.0
+        with:
+          subject-checksums: dist/SHA256SUMS
       - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -165,6 +175,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -225,6 +236,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Extract Docker metadata
@@ -357,14 +369,30 @@ jobs:
           echo "Nistro CLI version: $cli_version"
           echo "$cli_version" | grep -F "$version"
 
+  dev-validation:
+    name: Validate candidate against Dev
+    needs: [prepare, publish, test-install-script, verify-installer, docker-e2e-test]
+    # Every candidate, including prereleases, receives exact-binary live Dev
+    # coverage before stable promotion. Dispatchers run from protected main.
+    uses: ./.github/workflows/release-validation.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      environment: dev
+      cli-version: ${{ needs.prepare.outputs.version }}
+      source-run-id: ${{ github.run_id }}
+
   promote-release:
     name: Promote release to latest
+    if: needs.prepare.outputs.stable == 'true'
     needs:
       - prepare
       - test-install-script
       - verify-installer
       - release-package-multi-arch-merge
       - docker-e2e-test
+      - dev-validation
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -402,15 +430,17 @@ jobs:
           prerelease: false
           make_latest: true
 
-  # Call directly after promotion: releases updated with GITHUB_TOKEN do not
-  # trigger another workflow listening for release: published events.
-  smoke-tests:
+  # Explicit workflow_dispatch triggers work with GITHUB_TOKEN. Production
+  # credentials and App keys stay in protected default-branch worker workflows.
+  production-validation:
+    name: Validate stable release against production
     needs: [prepare, promote-release]
     if: needs.prepare.outputs.stable == 'true'
-    uses: ./.github/workflows/smoke-tests.yml
+    uses: ./.github/workflows/release-validation.yml
+    permissions:
+      contents: read
+      actions: write
     with:
       environment: production
       cli-version: ${{ needs.prepare.outputs.version }}
-      server: ${{ vars.NISTRO_SERVER || 'https://api.nistro.ai' }}
-      run-canaries: true
-    secrets: inherit
+      source-run-id: ${{ github.run_id }}

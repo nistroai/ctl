@@ -1,6 +1,6 @@
 // Package smoke_test exercises a released CLI against a real Nistro server.
 // TestProductionSmoke checks login, logout, reads, and discovery.
-// TestProductionCanary additionally provisions and verifies dedicated resources.
+// Deployment canaries live in omnistrate/nistro-e2e-tests.
 package smoke_test
 
 import (
@@ -120,6 +120,15 @@ func TestProductionSmoke(t *testing.T) {
 // session. Callers register resource cleanup afterward so logout happens last.
 func newLiveCLI(t *testing.T) *testutils.CLI {
 	t.Helper()
+	server := setting("NISTRO_SERVER", "https://api.nistro.ai")
+	if err := testutils.ValidateLiveServer(server, os.Getenv("NISTRO_TEST_ALLOWED_API_HOSTS")); err != nil {
+		t.Fatal(err)
+	}
+	httpTimeout := setting("NISTRO_HTTP_TIMEOUT", "2m")
+	requestDeadline, err := time.ParseDuration(httpTimeout)
+	if err != nil || requestDeadline <= 0 || requestDeadline >= 3*time.Minute {
+		t.Fatal("NISTRO_HTTP_TIMEOUT must be positive and shorter than the three-minute CLI deadline")
+	}
 	// An enabled run must never build from source or silently skip missing auth.
 	binary := strings.TrimSpace(os.Getenv("NISTRO_TEST_BINARY"))
 	if binary == "" {
@@ -135,8 +144,9 @@ func newLiveCLI(t *testing.T) *testutils.CLI {
 		t.Fatal("enabled smoke tests require NISTRO_EMAIL and NISTRO_PASSWORD, or NISTRO_TOKEN")
 	}
 	cli := testutils.New(t, testutils.Options{
-		Binary: binary, Server: setting("NISTRO_SERVER", "https://api.nistro.ai"),
-		Timeout: 90 * time.Second, Secrets: []string{email, password, token},
+		Binary: binary, Server: server,
+		Timeout: 3 * time.Minute, Secrets: []string{email, password, token},
+		Env: map[string]string{"NISTRO_HTTP_TIMEOUT": httpTimeout},
 	})
 
 	if !t.Run("version", func(t *testing.T) {

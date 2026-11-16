@@ -17,6 +17,23 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+	configErr  error
+}
+
+const DefaultHTTPTimeout = 30 * time.Second
+
+type ClientOption func(*Client)
+
+// WithTimeout sets a positive request deadline. Invalid options are returned
+// before any request is sent, preserving NewClient's existing factory signature.
+func WithTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout <= 0 {
+			client.configErr = fmt.Errorf("HTTP request timeout must be positive")
+			return
+		}
+		client.httpClient.Timeout = timeout
+	}
 }
 
 type SignInRequest struct {
@@ -230,8 +247,41 @@ type ObserveSummary struct {
 	GPUFraction         float64   `json:"gpu_fraction"`
 }
 
-func NewClient(baseURL, token string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, httpClient: &http.Client{Timeout: 30 * time.Second}}
+func NewClient(baseURL, token string, options ...ClientOption) *Client {
+	client := &Client{
+		baseURL: strings.TrimRight(baseURL, "/"), token: token,
+		httpClient: &http.Client{Timeout: DefaultHTTPTimeout, CheckRedirect: sameOriginRedirect},
+	}
+	for _, option := range options {
+		option(client)
+	}
+	return client
+}
+
+// RequestTimeout also lets commands retain enough time for the configured
+// request deadline; an earlier command or parent deadline still takes priority.
+func (c *Client) RequestTimeout() time.Duration { return c.httpClient.Timeout }
+
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	first := via[0].URL
+	if req.URL.User != nil || !strings.EqualFold(req.URL.Scheme, first.Scheme) ||
+		!strings.EqualFold(req.URL.Hostname(), first.Hostname()) || effectivePort(req.URL) != effectivePort(first) {
+		return fmt.Errorf("refusing API redirect to a different origin")
+	}
+	return nil
+}
+
+func effectivePort(location *url.URL) string {
+	if port := location.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(location.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // Resource preserves the full response for deployment tables and details.
@@ -394,6 +444,9 @@ func (c *Client) CreateCloudAccount(ctx context.Context, req CloudAccountRequest
 }
 
 func (c *Client) Observe(ctx context.Context, endpoint, apiKey string) (ObserveSummary, error) {
+	if c.configErr != nil {
+		return ObserveSummary{}, c.configErr
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/v1/observability/summary", nil)
 	if err != nil {
 		return ObserveSummary{}, err
@@ -416,6 +469,9 @@ func (c *Client) Observe(ctx context.Context, endpoint, apiKey string) (ObserveS
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any, dst any) error {
+	if c.configErr != nil {
+		return c.configErr
+	}
 	var body io.Reader
 	if payload != nil {
 		raw, err := json.Marshal(payload)

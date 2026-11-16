@@ -1,0 +1,55 @@
+name: Release Validation Dispatch
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      cli-version:
+        type: string
+        required: true
+      source-run-id:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  validate:
+    name: Await ${{ matrix.workflow }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    strategy:
+      fail-fast: false
+      matrix:
+        workflow: [smoke-tests.yml, dispatch-canaries.yml]
+    steps:
+      - name: Resolve trusted dispatcher revision
+        id: harness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api repos/nistroai/ctl/git/ref/heads/main --jq .object.sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout immutable trusted dispatcher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nistroai/ctl
+          ref: ${{ steps.harness.outputs.sha }}
+          persist-credentials: false
+      - name: Dispatch exact candidate and await result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.cli-version }}
+          SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          VALIDATION_WORKFLOW: ${{ matrix.workflow }}
+        run: |
+          python3 .github/scripts/dispatch-and-wait.py \
+            --repository nistroai/ctl --workflow "$VALIDATION_WORKFLOW" \
+            --environment "$TARGET_ENVIRONMENT" --version "$RELEASE_VERSION" \
+            --source-run-id "$SOURCE_RUN_ID" --timeout-minutes 125

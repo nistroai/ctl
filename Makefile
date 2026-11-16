@@ -14,7 +14,7 @@ LDFLAGS = -s -w \
 	-X nistro-ctl/internal/buildinfo.Commit=$(COMMIT) \
 	-X nistro-ctl/internal/buildinfo.Date=$(BUILD_DATE)
 
-.PHONY: build test test-binary test-readme smoke-test canary-test
+.PHONY: build test test-binary test-readme smoke-test
 build:
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -32,8 +32,4 @@ test-readme:
 
 # Requires NISTRO_TEST_BINARY and a smoke account. Never builds from source.
 smoke-test:
-	ENABLE_SMOKE_TEST=true go test -v -count=1 -timeout 15m ./test/smoke_test/... -run '^TestProductionSmoke$$'
-
-# Four 30m lifecycles plus independent cleanup fit within the overall deadline.
-canary-test:
-	ENABLE_CANARY_TEST=true go test -v -count=1 -timeout 150m ./test/smoke_test/... -run '^TestProductionCanary$$'
+	ENABLE_SMOKE_TEST=true go test -v -count=1 -timeout 20m ./test/smoke_test/... -run '^TestProductionSmoke$$'

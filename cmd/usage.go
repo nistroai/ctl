@@ -35,9 +35,10 @@ func init() {
 }
 
 func showUsage(cmd *cobra.Command, period string) error {
-	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+	requestClient := client()
+	ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 	defer cancel()
-	rows, err := client().Usage(ctx, period)
+	rows, err := requestClient.Usage(ctx, period)
 	if err != nil {
 		return err
 	}

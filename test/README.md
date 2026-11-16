@@ -8,14 +8,14 @@ including command registration, flag parsing, HTTP requests, and formatting.
 | Suite | Server | Coverage | When it runs |
 | --- | --- | --- | --- |
 | `test/integration_test` | Local `httptest.Server` | Help/version, login/logout, session isolation and token overrides, JSON/table output, errors, validation, discovery, and create/update/delete for both products | Normal Go tests on PRs/merge queue; published binaries on release runners |
-| `TestProductionSmoke` in `test/smoke_test` | Configured Nistro API, production by default | Released version, password login and saved session, deployment list/describe, Postgres placement catalog, hardware recommendations, and pricing offers for both tiers | Stable CLI releases, reusable workflow calls, and manual Actions runs |
-| `TestProductionCanary` in `test/smoke_test` | Configured Nistro API plus newly provisioned data endpoints | Create/list/describe/readiness, real inference and SQL, all supported updates, post-update data checks, delete and confirmation for both products and tiers | Four separate canary jobs after smoke checks; explicitly enabled local runs |
+| `TestProductionSmoke` in `test/smoke_test` | Protected Dev/production API | Released version, password login and saved session, deployment list/describe, Postgres placement catalog, hardware recommendations, and pricing offers for both tiers | Every release candidate against Dev; stable releases against production; trusted manual runs |
+| Private `omnistrate/nistro-e2e-tests` | Protected Dev/production API and data endpoints | Four fresh lifecycle cases and periodic persistent-deployment health | Dev candidates before stable promotion; production after stable promotion; daily lifecycle/hourly health |
 
-The smoke suite uses read and discovery operations. The canary suite additionally
-provisions dedicated deployments through the installed CLI, makes real inference
-requests and PostgreSQL queries, checks supported updates, and deletes its
-deployments. Normal PR tests use local fixtures; live suites require explicit
-enablement and a dedicated account with provisioning permissions.
+CLI smoke uses authentication, read and discovery operations. Deployment lifecycle
+code, its inference/SQL probes, and its HTTP/TLS PostgreSQL regression fixtures
+live in the private [Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests).
+Normal public PR checks need no Nistro account. Live runs require an approved
+server and dedicated account.
 
 ## README commands first
 
@@ -82,288 +82,97 @@ four create tiers and all three supported update tiers against local fixtures,
 including Postgres Scale offer selection and its update settings. Discovery
 tests check exact requests, table columns, price visibility, and config overrides.
 
-## Run locally
+## Local checks
 
-From the repository root:
-
-```bash
-# Existing unit tests and local binary contract tests; live tests skip.
+```sh
 make test
-
-# Build the CLI once in TestMain and run only binary contract tests.
 make test-binary
-
-# Run only README examples and documented authentication/config behavior.
 make test-readme
-
-# Exercise a specific existing executable instead of building source.
 NISTRO_TEST_BINARY=/absolute/path/to/nistro make test-binary
+python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-Run live smoke tests against an installed release:
+The public test runner still builds a CLI for local contracts when no explicit
+binary is selected. Live smoke requires an installed binary and never builds a
+replacement. Its command helper creates an isolated temporary session directory
+and redacts known credentials from diagnostics.
 
-```bash
-sh install.sh --version v0.1.0 --install-dir "$PWD/dist/smoke-bin" --no-modify-path
-export NISTRO_TEST_BINARY="$PWD/dist/smoke-bin/nistro"
-export NISTRO_TEST_EXPECTED_VERSION=v0.1.0
-export NISTRO_SERVER=https://api.nistro.ai
-export NISTRO_EMAIL=cli-smoke@example.com
-read -r -s NISTRO_PASSWORD
-export NISTRO_PASSWORD
-make smoke-test
-unset NISTRO_PASSWORD
-```
+For authorized local smoke, select an approved binary, set `NISTRO_SERVER`,
+`NISTRO_TEST_ALLOWED_API_HOSTS`, and `NISTRO_EMAIL`/`NISTRO_PASSWORD` or
+`NISTRO_TOKEN`, then run `make smoke-test`. Do not paste passwords into process
+arguments; login uses password stdin. Set `NISTRO_TEST_EXPECTED_VERSION` to assert
+the exact version. A token explicitly skips password-login coverage. Configure
+`NISTRO_SMOKE_INFERENCE_ID` and `NISTRO_SMOKE_POSTGRES_ID` for describe coverage;
+without configured or existing deployments, describe is an explicit optional skip.
 
-Use a release that includes this framework and a real dedicated test account.
-On Windows, select `nistro.exe` and run from Git Bash. A token can replace the
-email/password pair via `NISTRO_TOKEN`; this mode explicitly skips password login
-coverage. With email/password configured, the suite logs in through
-`--password-stdin` and subsequent subprocesses use the saved session, even if
-the parent shell has a token. The password is never passed as a process argument.
+## Protected workflows and release ordering
 
-Every CLI gets a temporary home and config directory. Tests do not use or clear
-your normal `~/.nistro` sessions. The helper enforces a command timeout and
-redacts known credentials and saved session tokens from failure diagnostics.
-Tests assert API JSON without printing it because deployment details can
-contain credentials.
+`smoke-tests.yml` accepts only an environment and published release selector,
+with optional originating Release/correlation IDs. It accepts no server or test
+harness ref. Run it on `main`; other refs fail. Tests and download code are checked
+out at the immutable workflow SHA. Before account credentials are injected, the
+workflow validates the environment's exact HTTPS API host, resolves the release's
+explicit tag to an immutable commit on `main`, verifies every Release prerequisite
+job, and checks the downloaded archive's checksum and GitHub provenance against
+that source commit. A version-shaped branch cannot select test code.
 
+The installed binary is verified against the approved version. Control-plane
+redirects cannot change origin or downgrade HTTPS; login bodies and tokens are
+not forwarded to another origin. CLI `NISTRO_HTTP_TIMEOUT` defaults to `30s` for
+ordinary use and accepts positive Go durations. Live smoke uses `2m` by default,
+with a three-minute subprocess deadline, twenty-minute suite deadline and
+thirty-minute job deadline. Configured live request deadlines must be below three
+minutes. These cover authentication/read/discovery; cold inference provisioning
+has separate private per-tier lifecycle and cleanup deadlines.
 
-## Deployment lifecycle canaries
+Release ordering is:
 
-The reusable workflow enables `run-canaries` by default. After the smoke suite
-passes, four separate jobs exercise these lifecycles with the same exact
-installed release:
+1. Build and publish versioned candidate assets with checksums and provenance.
+2. Pass source, installer, installed-binary and container checks for every tag.
+3. Dispatch the trusted public smoke and private canary workers against Dev and
+   wait for both corresponding runs to succeed.
+4. Promote only intended stable releases. A prerelease suffix or original
+   prerelease flag prevents stable/latest GitHub and image alias updates.
+5. Dispatch production checks after stable promotion and wait for their results.
 
-| Case | Default create | Supported update |
+The tag-context release jobs hold no production account or App secrets. They use
+`GITHUB_TOKEN` to dispatch public workers on `main`. `dispatch-canaries.yml` uses
+a scoped GitHub App to dispatch the private worker on `master`, correlates the
+exact run, renews its one-hour installation token during longer waits, and
+propagates failure. Queuing a run alone cannot satisfy validation. Production
+failure occurs after promotion; the release remains available.
+
+Historical archives without the new attestations cannot pass operational
+verification. Merge both coordinated PRs and configure the following settings
+before publishing the first attested candidate.
+
+## Repository setup
+
+Protect `main` and create environments `dev`, `production`, and `canary-dispatch`.
+Restrict their deployment branches to `main`; apply the team's environment
+protection policy. In both `dev` and `production`, configure:
+
+| Kind | Name | Purpose |
 | --- | --- | --- |
-| Postgres On-Demand | 2 vCPU, 50 GiB, location `ANY`, unique database/user/password | Increase storage by 10 GiB |
-| Postgres Scale | A placement from the live catalog, 50 GiB, one standby, unique database/user/password | Increase the standby count |
-| Inference On-Demand | `Qwen/Qwen2.5-0.5B-Instruct`, context length 2048, location `ANY` | This tier has no CLI update command |
-| Inference Scale | The same small model, live hardware recommendation, one replica | Increase the replica count |
+| Variable | `NISTRO_SERVER` | Approved root HTTPS API URL |
+| Variable | `NISTRO_ALLOWED_API_HOSTS` | Exact comma-separated API hostnames; no wildcard or URL |
+| Secrets | `SMOKE_TEST_EMAIL`, `SMOKE_TEST_PASSWORD` | Dedicated smoke account |
+| Secret | `SMOKE_TEST_TOKEN` | Alternative token authentication |
+| Variable | `NISTRO_HTTP_TIMEOUT` | Optional request deadline, default `2m` for live smoke |
+| Variables | `NISTRO_SMOKE_INFERENCE_ID`, `NISTRO_SMOKE_POSTGRES_ID` | Dedicated describe fixtures |
+| Variables | `NISTRO_SMOKE_MODEL`, `NISTRO_SMOKE_MAX_MODEL_LEN`, `NISTRO_SMOKE_LOCATION` | Optional discovery inputs |
 
-Each case runs through the CLI binary:
+In `canary-dispatch`, store `CANARY_APP_ID` and `CANARY_APP_PRIVATE_KEY`. Install
+that App on only `omnistrate/nistro-e2e-tests`, granting Actions read/write,
+Contents read, and Metadata read. Public PR jobs never receive these secrets.
+Configure private `dev`/`production` environments, account credentials, persistent
+IDs, and per-tier configs using that repository's README. These settings have not
+been provisioned by the migration, and fixture success is not live validation.
 
-1. List existing deployments, create a dedicated resource, and capture its ID.
-   A returned ID already present in the initial list is rejected without mutation
-   or cleanup of that existing resource.
-2. Require the new ID to appear in list/describe and poll provisioning status.
-   Terminal failures fail immediately; transient availability and serving warmup
-   have bounded retries. Idle On-Demand inference is tested by making a request.
-3. Verify the data endpoint. Inference requires the configured model's advertised
-   identity (or an explicit exact runtime alias), then sends a real chat-completion
-   request, requiring the returned model to match the selected identity, generated
-   text, and positive token usage whose total equals prompt plus completion
-   tokens. PostgreSQL creates a uniquely named table in the initial connection's
-   schema and commits a marker using parameterized SQL. The fully qualified
-   table name remains stable across later `search_path` changes.
-4. Compare the requested update with the effective initial deployment settings
-   and reject an update that changes no value. Run the supported update, require
-   the reported target values, and poll readiness again. A timestamp or updating
-   status alone cannot prove an applied update. Reconnect to PostgreSQL and read
-   the same committed marker; repeat inference after its replica update. When parameter
-   overrides are supplied, verify them with `current_setting`, including resetting
-   keys removed by a replacement parameter set.
-5. Remove the SQL checkpoint, request deployment deletion, and confirm both
-   describe deletion/not-found and absence from list. Hiding a still-deleting
-   deployment from list alone cannot pass this check.
+## Extending coverage
 
-Cleanup is registered as soon as a new ID is accepted and uses an independent
-five-minute deadline after a test failure. It deletes only the owned ID, before
-logging out. Created IDs are recorded in test output. A hard runner termination
-or forced cancellation can prevent cleanup; inspect those IDs if a run is
-interrupted. These canaries create billable CPU/GPU/storage resources, so use a
-dedicated test account with capacity and provisioning permissions.
-
-Each workflow case has a 30-minute lifecycle deadline, a 40-minute Go test
-deadline, and a 45-minute runner deadline, leaving time for cleanup. Missing
-credentials, failed prerequisites, malformed configuration, and a selected
-release that lacks the requested suite fail instead of producing an empty pass.
-
-For a local run, select an installed binary and credentials as above, then run:
-
-```bash
-# All four cases, with a separate deadline for each.
-make canary-test
-
-# One case while validating account configuration.
-NISTRO_CANARY_CASES=postgres/on-demand make canary-test
-```
-
-`ENABLE_CANARY_TEST=true` is required when calling `go test` directly. The
-optional local settings are `NISTRO_CANARY_TIMEOUT` (30m),
-`NISTRO_CANARY_CLEANUP_TIMEOUT` (5m), `NISTRO_CANARY_POLL_INTERVAL` (10s),
-`NISTRO_CANARY_PROBE_TIMEOUT` (90s), `NISTRO_CANARY_MODEL`, and
-`NISTRO_CANARY_LOCATION` (US). Keep Go's overall deadline longer than all selected
-lifecycles and their cleanup. The Make target reserves 150 minutes for all four.
-The workflow also accepts `NISTRO_CANARY_MODEL`, `NISTRO_CANARY_LOCATION`, and
-`NISTRO_CANARY_SERVED_MODEL` as environment variables. Use the served-model
-override when the runtime advertises another alias.
-
-Create overrides merge with generated defaults. Update overrides replace the
-default update and must change at least one effective setting, including values
-injected by the CLI or platform. Equivalent PostgreSQL units such as `32MB` and
-`32768kB` do not count as a change. Integer settings are compared exactly after
-unit normalization, so adjacent large values remain distinct. Supply each
-override as one JSON object in its optional environment secret:
-
-| GitHub secret / local environment variable | Example override |
-| --- | --- |
-| `NISTRO_CANARY_POSTGRES_ON_DEMAND_CREATE_CONFIG` | `{"vcpu":1,"storage_gib":20,"location":"US"}` |
-| `NISTRO_CANARY_POSTGRES_ON_DEMAND_UPDATE_CONFIG` | `{"vcpu":2,"storage_gib":30}` |
-| `NISTRO_CANARY_POSTGRES_SCALE_CREATE_CONFIG` | `{"cloud":"aws","region":"us-east-1","instance_type":"m7i.large","replicas":0}` |
-| `NISTRO_CANARY_POSTGRES_SCALE_UPDATE_CONFIG` | `{"replicas":1,"parameters":{"work_mem":"32MB"}}` |
-| `NISTRO_CANARY_INFERENCE_ON_DEMAND_CREATE_CONFIG` | `{"model_url":"Qwen/Qwen2.5-0.5B-Instruct","max_model_len":2048}` |
-| `NISTRO_CANARY_INFERENCE_SCALE_CREATE_CONFIG` | `{"cloud":"aws","region":"us-east-1","instance_type":"<available SKU>"}` |
-| `NISTRO_CANARY_INFERENCE_SCALE_UPDATE_CONFIG` | `{"replicas":2}` |
-
-PostgreSQL `parameters` updates replace the custom parameter set. Omitting this
-field leaves parameters unchanged; supplying `{}` removes the custom set. When
-both create parameters and a replacement update are configured, the canary first
-creates with platform defaults and records the relevant SQL settings. It then
-applies and verifies the requested initial custom parameters through a setup
-update before testing the replacement. This supplies trusted reset expectations
-for removed keys instead of assuming built-in PostgreSQL defaults. The SQL
-checkpoint remains present throughout these updates.
-
-Setting comparisons accept equivalent units and scientific notation. Integers
-compare exactly; real values allow a `1e-9` relative rounding tolerance without
-an absolute minimum. Zero only matches zero, so tiny parameter changes remain
-detectable both before and after an update.
-
-Generated configuration files are owner-readable and never printed. Inference
-uses the documented `/openai/v1` API base path and HTTPS, allowing HTTP only for
-loopback test fixtures. PostgreSQL verifies TLS certificates and hostnames with
-no plaintext fallback. If the database uses a private CA, configure the optional
-`CANARY_POSTGRES_CA_CERT` PEM secret; the workflow writes it to a temporary trust
-file. Locally, set `NISTRO_CANARY_POSTGRES_SSLROOTCERT` to that PEM file's path.
-
-PR checks also run the canary implementation against local HTTP fixtures and a
-disposable TLS-enabled PostgreSQL 18 container. Run the real SQL fixture checks
-locally with Docker and OpenSSL:
-
-```bash
-bash test/resources/run-postgres-canary-fixtures.sh
-```
-
-The script binds only to loopback, checks both PostgreSQL tiers and checkpoint
-failure cases, and cleans its container and temporary certificates. No Nistro
-account or production endpoint is needed for these checks.
-
-## Production account configuration
-
-Create a GitHub environment named `production` in the repository running the
-workflow and configure these secrets:
-
-| Secret | Purpose |
-| --- | --- |
-| `SMOKE_TEST_EMAIL` and `SMOKE_TEST_PASSWORD` | Recommended: exercise login and session persistence as well as authenticated commands |
-| `SMOKE_TEST_TOKEN` | Alternative authentication; skips password login coverage |
-| `CLI_REPOSITORY_TOKEN` | Optional read access to `nistroai/ctl` for a caller whose token cannot access it |
-
-Enabled smoke runs fail if authentication is absent or incomplete. Credentials
-need access to both product lists, discovery endpoints, and deployment
-create/update/delete operations for the lifecycle canaries. An empty deployment
-list is valid. To require describe coverage even for a new test account, keep
-dedicated existing fixtures and configure the optional variables below.
-
-| GitHub environment variable / local environment variable | Default / purpose |
-| --- | --- |
-| `NISTRO_SMOKE_INFERENCE_ID` | Describe this inference deployment; otherwise use the first listed deployment or skip describe if none exists |
-| `NISTRO_SMOKE_POSTGRES_ID` | Describe this Postgres deployment; same fallback as inference |
-| `NISTRO_SMOKE_MODEL` | `Qwen/Qwen2.5-7B-Instruct`; public model used for inference discovery |
-| `NISTRO_SMOKE_MAX_MODEL_LEN` | `4096`; model context length |
-| `NISTRO_SMOKE_LOCATION` | `US`; location for Inference Scale recommendations (`US`, `EU`, or `ASIA`) |
-
-The suite selects a Postgres placement from the live catalog and an inference
-cloud/region/SKU from live hardware recommendations. It avoids pinning hardware
-that may disappear from the catalog. On-Demand pricing uses location `ANY`.
-
-For local runs, set `ENABLE_SMOKE_TEST=true`, `NISTRO_TEST_BINARY`, and either
-`NISTRO_EMAIL`/`NISTRO_PASSWORD` or `NISTRO_TOKEN`. `NISTRO_SERVER` defaults to
-`https://api.nistro.ai`; `NISTRO_TEST_EXPECTED_VERSION` optionally asserts an exact
-version. The Actions workflow always asserts the selected release version.
-
-## GitHub Actions
-
-Publishing a draft release starts the existing Release workflow, which marks
-the release as a prerelease while validating it. The workflow installs and tests
-the uploaded binary on Linux AMD64/ARM64, macOS, and Windows. Installer, binary
-contract, and container checks must succeed before promotion to stable/latest.
-After promotion, every stable version tag calls `.github/workflows/smoke-tests.yml`
-against production, including all four lifecycle canaries. Tags with a prerelease
-suffix still run binary contract tests and can run live tests manually.
-
-The smoke workflow resolves `latest` once to an exact published tag, checks out
-that tag's tests, and installs its checksum-verified release archive. It never
-builds a substitute binary. Failed tests fail the job, and Go JSON results are
-uploaded even on test failure. `-count=1` prevents Go's cache from reusing a prior
-successful production result. Each canary matrix job uses its own isolated session and deployment IDs.
-Runs may overlap, so GitHub concurrency groups cannot replace a pending
-production release check.
-
-The release pipeline calls the workflow directly after promotion because
-releases updated with `GITHUB_TOKEN` do not trigger another workflow listening
-for `release: published`. Smoke failure marks the release workflow failed;
-the already promoted release remains available.
-
-To validate the CLI after **backend production releases**, add a dependent job
-to that repository's deployment workflow:
-
-```yaml
-jobs:
-  # Your existing deployment job is named deploy-production in this example.
-  cli-smoke:
-    needs: deploy-production
-    permissions:
-      contents: read
-    uses: nistroai/ctl/.github/workflows/smoke-tests.yml@main
-    with:
-      environment: production
-      cli-version: latest
-      server: https://api.nistro.ai
-      run-canaries: true
-    secrets:
-      SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
-      SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
-```
-
-Pin the workflow reference and `cli-version` to a release tag when you want a
-fixed test version. The workflow explicitly checks out `nistroai/ctl`, so a
-backend caller does not accidentally run its own repository's tests. Configure
-the `production` environment in the caller repository, or pass repository
-secrets as shown. If `nistroai/ctl` is private, allow reusable workflow access
-from that caller and provide `CLI_REPOSITORY_TOKEN` with repository read access;
-the existing installer also needs access to the release download URLs.
-
-For a manual rerun, open **Actions → CLI Smoke Tests → Run workflow** and select
-the environment, API server, and release tag. `run-canaries` defaults to true;
-turn it off for a read/discovery-only rerun. No periodic schedule is required.
-
-## Add scenarios
-
-Add local API contract scenarios to `test/integration_test` and live read/discovery
-scenarios to `test/smoke_test`. Reuse `testutils.New` to keep sessions isolated:
-
-```go
-cli := testutils.New(t, testutils.Options{
-    Binary: binary,
-    Server: server.URL, // httptest.Server for local contract coverage
-})
-result := cli.MustRun(t, "", "postgres", "list", "-o", "json")
-// Decode result.Stdout and assert the behavior. Never log raw deployment JSON.
-```
-
-Use `cli.Run` when a nonzero exit is expected. Use `cli.Redact` before including
-command output in diagnostics. Register new command behavior in
-`commandScenarios` in `test/integration_test/command_coverage_test.go` and use
-`newCLI` there so successful execution is recorded by the coverage guard.
-Add lifecycle scenarios to `TestProductionCanary` with dedicated resources and
-bounded cleanup. Keep local fixture coverage for expected failures and request
-contracts.
-
-Reference docs: [CLI](https://dev.nistro.ai/docs/cli),
-[Postgres](https://dev.nistro.ai/docs/postgres), and
-[Inference](https://dev.nistro.ai/docs/inference). The current CLI requires
-`--location` for `inference recommend-hardware scale`; the CLI docs currently
-show a stale `--cloud`/`--region` example. Tests follow the executable's supported
-location → recommendation → placement sequence.
+Keep local CLI request/output/authentication scenarios in `test/integration_test`
+and register successful command behavior in `commandScenarios`. Keep public live
+read/discovery checks in `TestProductionSmoke`. Add lifecycle, data-plane,
+persistent-health and broader E2E scenarios in the private repository, including
+their fixture regressions and bounded cleanup.

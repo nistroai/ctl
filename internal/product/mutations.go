@@ -123,9 +123,9 @@ func AddMutations(parent *cobra.Command, deps Deps, path string) {
 				if err := validateMutation(body, parent.Name(), tier, action); err != nil {
 					return err
 				}
-				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
-				defer cancel()
 				client := deps.Client()
+				ctx, cancel := context.WithTimeout(cmd.Context(), max(2*time.Minute, client.RequestTimeout()))
+				defer cancel()
 				resourcePath, method := path, "POST"
 				if action == "update" {
 					id := args[0]

@@ -89,16 +89,20 @@ version tag:
 Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
 and ARM64, generates `SHA256SUMS`, validates the installer and binary contracts,
 publishes a signed multi-architecture image to GHCR, and runs container E2E
-tests. Only after these checks succeed does the workflow promote the GitHub
-release to stable and latest, and move the GHCR major, minor, and `latest` image
-aliases. If validation fails, the release remains a prerelease and the stable
-aliases are unchanged.
+tests. Versioned CLI archives also receive GitHub build-provenance attestations.
+Every candidate then runs CLI smoke and private lifecycle tests against Dev.
+Only intended stable releases with successful validation are promoted to stable
+and latest and update the GHCR major, minor, and `latest` aliases. Prerelease tags
+and releases explicitly marked as prereleases retain their prerelease status.
 
-After promotion, stable version tags run authenticated production smoke tests
-and all four deployment lifecycle canaries, including real inference requests
-and PostgreSQL queries. A canary failure marks the workflow failed; the promoted
-release remains available. See [the test framework guide](test/README.md) for
-coverage, local commands, GitHub secrets, and workflow integration.
+After promotion, stable releases run authenticated production CLI smoke tests
+and the four lifecycle canaries in the private
+[Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests).
+The release workflow waits for the corresponding validation runs. A production
+failure marks the workflow failed; the promoted release remains available.
+Configure the protected environments and cross-repository GitHub App before
+publishing: missing configuration blocks Dev validation and stable promotion.
+See [the test framework guide](test/README.md) for coverage and setup.
 Run `make test-readme` to execute the documented CLI examples and configuration
 checks against a local test API using the real binary.
 
