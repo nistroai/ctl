@@ -212,5 +212,6 @@ Useful commands:
 Configuration:
 
 - The default REST API server is production: `https://api.nistro.ai`. Override it with `--server` or `NISTRO_SERVER` (for example, `http://127.0.0.1:8080` for local development).
+- For the confirmed Dev API, set `NISTRO_SERVER=https://dev-api.nistro.ai`.
 - Commands use the session saved by `nistro login`. `NISTRO_TOKEN` can override it for automation. Logout clears the saved session; unset `NISTRO_TOKEN` to stop using that override.
 - `NISTRO_EMAIL` and `NISTRO_PASSWORD` can supply login credentials instead of flags.

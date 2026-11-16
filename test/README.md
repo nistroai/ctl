@@ -170,17 +170,26 @@ the team's environment protection policy. In both environments, configure:
 | Variables | `NISTRO_SMOKE_INFERENCE_ID`, `NISTRO_SMOKE_POSTGRES_ID` | Dedicated describe fixtures |
 | Variables | `NISTRO_SMOKE_MODEL`, `NISTRO_SMOKE_MAX_MODEL_LEN`, `NISTRO_SMOKE_LOCATION` | Optional discovery inputs |
 
-Confirm the Dev CLI API hostname with its owner before setting Dev API variables.
-Read-only checks found an HTML 404 for `/v1/postgres/scale/catalog` at
-`https://dev.nistro.ai`. Existing portal/website configuration references
-`https://dev-api.nistro.ai`, where the catalog returned JSON 401 and `/healthz`
-returned JSON 200. These checks do not establish the owner's intended target;
-hostname confirmation remains pending.
+The confirmed Dev CLI API is `https://dev-api.nistro.ai`. Set these variables
+in the protected public `dev` environment:
 
-Dedicated Dev/production smoke credentials and API configuration still need to
-be supplied by the repository owners. Fixture success does not establish live
-Nistro authentication or provisioning success. Private canary setup is described
-in the private repository's README and is independent of this release setup.
+| Name | Value |
+| --- | --- |
+| `NISTRO_SERVER` | `https://dev-api.nistro.ai` |
+| `NISTRO_ALLOWED_API_HOSTS` | `dev-api.nistro.ai` |
+
+Read-only checks returned HTTP 200 JSON from the API health check and HTTP 401
+JSON for unauthenticated CLI API requests, reporting a missing bearer token.
+These results verify reachability and the authentication boundary. Local CLI
+smoke also passed using a saved Dev token: deployment lists, Postgres describe,
+placements, recommendations and offers. Password login and inference describe
+were explicitly skipped; provisioning and model generation were not exercised.
+Automated smoke still requires dedicated credentials in GitHub.
+
+A public repository administrator still needs to configure the protected
+`dev`/`production` environments and dedicated smoke credentials. Private canary
+setup is described in the private repository's README and is independent of
+this release setup.
 
 ## Extending coverage
 
