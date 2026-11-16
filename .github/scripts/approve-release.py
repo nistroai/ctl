@@ -77,7 +77,7 @@ def resolve(requested, source_run):
     if release.get("draft") or not release.get("published_at") or (latest and (release.get("prerelease") or semantic_prerelease)):
         fail("CLI release must be published; latest must be stable")
     if os.environ.get("TARGET_ENVIRONMENT") == "production" and (release.get("prerelease") or semantic_prerelease):
-        fail("Production canaries require a promoted stable CLI release")
+        fail("Production smoke requires a promoted stable CLI release")
     ref = api(f"repos/{REPOSITORY}/git/ref/tags/{quote(tag, safe='')}")["object"]
     for _ in range(8):
         if ref["type"] == "commit":
@@ -109,32 +109,24 @@ def resolve(requested, source_run):
 
 def main():
     environment = os.environ.get("TARGET_ENVIRONMENT")
-    mode = os.environ.get("APPROVAL_MODE", "smoke")
     if (os.environ.get("GITHUB_REPOSITORY") != REPOSITORY
             or os.environ.get("GITHUB_REF") != "refs/heads/main"
             or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
-            or environment not in ("dev", "production")
-            or mode not in ("smoke", "dispatch")):
+            or environment not in ("dev", "production")):
         fail("Live validation requires the protected CLI main workflow and approved environment")
     workflow_sha = os.environ.get("GITHUB_WORKFLOW_SHA", "")
     checked_out = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     if not re.fullmatch(r"[0-9a-f]{40}", workflow_sha) or checked_out != workflow_sha:
         fail("Harness must be checked out at the immutable trusted workflow commit")
     resolved = resolve(os.environ.get("CLI_VERSION", "latest"), os.environ.get("SOURCE_RUN_ID", ""))
-    release = api(f"repos/{REPOSITORY}/releases/{resolved['release-id']}")
-    if environment == "production" and (release.get("prerelease") or is_prerelease(resolved["version"])):
-        fail("Production validation requires a stable published release")
-    if mode == "smoke":
-        resolved["server"] = validate_target(os.environ.get("NISTRO_SERVER", ""), os.environ.get("NISTRO_ALLOWED_API_HOSTS", ""))
-    elif not os.environ.get("SOURCE_RUN_ID"):
-        fail("Canary dispatch requires the exact originating CLI Release run")
+    resolved["server"] = validate_target(os.environ.get("NISTRO_SERVER", ""), os.environ.get("NISTRO_ALLOWED_API_HOSTS", ""))
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key, value in resolved.items():
             if "\n" in value or "\r" in value:
                 fail("Invalid multiline approval output")
             output.write(f"{key}={value}\n")
     with open("approved-release.json", "w", encoding="utf-8") as report:
-        json.dump({**resolved, "harness-sha": workflow_sha, "environment": environment, "mode": mode}, report, indent=2)
+        json.dump({**resolved, "harness-sha": workflow_sha, "environment": environment}, report, indent=2)
 
 
 if __name__ == "__main__":

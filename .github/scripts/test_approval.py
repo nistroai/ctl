@@ -1,11 +1,10 @@
 import importlib.util
-import json
 import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 spec = importlib.util.spec_from_file_location("approval", pathlib.Path(__file__).with_name("approve-release.py"))
 approval = importlib.util.module_from_spec(spec)
@@ -26,6 +25,26 @@ class TargetPolicyTests(unittest.TestCase):
     def test_empty_allowlist_is_closed(self):
         with self.assertRaises(ValueError):
             approval.validate_target("https://api.nistro.ai", "")
+
+    def test_every_smoke_run_validates_protected_target(self):
+        sha = "a" * 40
+        resolved = {"version": "v1.0.0", "sha": sha, "release-id": "1", "source-run-id": "1"}
+        env = {"GITHUB_REPOSITORY": "nistroai/ctl", "GITHUB_REF": "refs/heads/main",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "TARGET_ENVIRONMENT": "production",
+               "GITHUB_WORKFLOW_SHA": sha, "NISTRO_ALLOWED_API_HOSTS": "api.nistro.ai",
+               "GITHUB_OUTPUT": "fixture-output", "APPROVAL_MODE": "dispatch"}
+        for server in ("https://api.nistro.ai", "https://evil.test"):
+            with self.subTest(server=server), patch.dict(os.environ, {**env, "NISTRO_SERVER": server}), \
+                    patch.object(approval.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, sha)), \
+                    patch.object(approval, "resolve", return_value=dict(resolved)), \
+                    patch("builtins.open", mock_open()) as output:
+                if server == "https://evil.test":
+                    with self.assertRaisesRegex(ValueError, "allowlist"):
+                        approval.main()
+                    output.assert_not_called()
+                else:
+                    approval.main()
+                    self.assertTrue(any("server=https://api.nistro.ai" in str(call) for call in output().write.call_args_list))
 
 
 class ReleaseRunTests(unittest.TestCase):
@@ -85,54 +104,6 @@ class ReleaseRunTests(unittest.TestCase):
         for broken in (jobs[:-1], [{**job, "conclusion": "skipped"} if job["name"] == "publish" else job for job in jobs]):
             with patch.object(approval, "api", return_value={"jobs": broken}), self.assertRaises(ValueError):
                 approval.approve_run(self.run, self.sha, "v1.0.0", True)
-
-
-class OperationalResultTests(unittest.TestCase):
-    def result(self, events, auth=None):
-        with tempfile.TemporaryDirectory() as folder:
-            path = pathlib.Path(folder) / "results.jsonl"
-            path.write_text("\n".join(json.dumps(event) for event in events))
-            env = {**os.environ, "NISTRO_EMAIL": "fixture@example.test", "NISTRO_PASSWORD": "fixture-password", "NISTRO_TOKEN": ""}
-            if auth:
-                env.update(auth)
-            return subprocess.run(["python3", str(pathlib.Path(__file__).with_name("check-live-results.py")),
-                                   str(path), "TestProductionCanary", "postgres/scale"], capture_output=True, env=env).returncode
-
-    def test_zero_tests_all_skips_wrong_case_or_partial_failure_cannot_pass(self):
-        top = {"Action": "pass", "Test": "TestProductionCanary"}
-        selected = {"Action": "pass", "Test": "TestProductionCanary/postgres/scale"}
-        login = {"Action": "pass", "Test": "TestProductionCanary/login"}
-        self.assertEqual(self.result([login, selected, top]), 0)
-        for events in ([], [{"Action": "skip", "Test": "TestProductionCanary"}], [top],
-                       [{**selected, "Test": "TestProductionCanary/postgres/on-demand"}, top],
-                       [selected, top, {"Action": "fail"}]):
-            with self.subTest(events=events):
-                self.assertNotEqual(self.result(events), 0)
-
-    def test_token_only_allows_exact_login_skip_but_requires_selected_case(self):
-        events = [{"Action": "skip", "Test": "TestProductionCanary/login"},
-                  {"Action": "pass", "Test": "TestProductionCanary/postgres/scale"},
-                  {"Action": "pass", "Test": "TestProductionCanary"}]
-        token_auth = {"NISTRO_EMAIL": "", "NISTRO_PASSWORD": "", "NISTRO_TOKEN": "fixture-token"}
-        self.assertEqual(self.result(events, token_auth), 0)
-        self.assertNotEqual(self.result(events), 0)
-        for broken in (events[1:], events + [{"Action": "skip", "Test": "TestProductionCanary/postgres/scale/probe"}],
-                       [events[0], events[2]], [{**events[0], "Test": "TestProductionCanary/login/other"}] + events[1:]):
-            with self.subTest(events=broken):
-                self.assertNotEqual(self.result(broken, token_auth), 0)
-        for auth in ({**token_auth, "NISTRO_EMAIL": "partial@example.test"}, {**token_auth, "NISTRO_TOKEN": ""}):
-            with self.subTest(auth=auth):
-                self.assertNotEqual(self.result(events, auth), 0)
-
-    def test_password_auth_requires_login_pass_and_rejects_every_skip(self):
-        events = [{"Action": "pass", "Test": "TestProductionCanary/login"},
-                  {"Action": "pass", "Test": "TestProductionCanary/postgres/scale"},
-                  {"Action": "pass", "Test": "TestProductionCanary"}]
-        self.assertEqual(self.result(events), 0)
-        for broken in (events[1:], [{**events[0], "Action": "skip"}] + events[1:],
-                       events + [{"Action": "skip", "Test": "TestProductionCanary/postgres/scale/probe"}]):
-            with self.subTest(events=broken):
-                self.assertNotEqual(self.result(broken), 0)
 
 
 if __name__ == "__main__":

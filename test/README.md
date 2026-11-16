@@ -9,7 +9,7 @@ including command registration, flag parsing, HTTP requests, and formatting.
 | --- | --- | --- | --- |
 | `test/integration_test` | Local `httptest.Server` | Help/version, login/logout, session isolation and token overrides, JSON/table output, errors, validation, discovery, and create/update/delete for both products | Normal Go tests on PRs/merge queue; published binaries on release runners |
 | `TestProductionSmoke` in `test/smoke_test` | Protected Dev/production API | Released version, password login and saved session, deployment list/describe, Postgres placement catalog, hardware recommendations, and pricing offers for both tiers | Every release candidate against Dev; stable releases against production; trusted manual runs |
-| Private `omnistrate/nistro-e2e-tests` | Protected Dev/production API and data endpoints | Four fresh lifecycle cases and periodic persistent-deployment health | Dev candidates before stable promotion; production after stable promotion; daily lifecycle/hourly health |
+| Private `omnistrate/nistro-e2e-tests` | Protected Dev/production API and data endpoints | Four fresh lifecycle cases and periodic persistent-deployment health | Independent schedules/manual runs against the latest stable CLI; all four production lifecycle cases hourly |
 
 CLI smoke uses authentication, read and discovery operations. Deployment lifecycle
 code, its inference/SQL probes, and its HTTP/TLS PostgreSQL regression fixtures
@@ -129,28 +129,36 @@ Release ordering is:
 
 1. Build and publish versioned candidate assets with checksums and provenance.
 2. Pass source, installer, installed-binary and container checks for every tag.
-3. Dispatch the trusted public smoke and private canary workers against Dev and
-   wait for both corresponding runs to succeed.
+3. Use the release's same-repository `GITHUB_TOKEN` to dispatch public CLI smoke
+   on trusted `main` against Dev, and wait for its corresponding run to succeed.
 4. Promote only intended stable releases. A prerelease suffix or original
    prerelease flag prevents stable/latest GitHub and image alias updates.
-5. Dispatch production checks after stable promotion and wait for their results.
+5. Run public production smoke after stable promotion and wait for its result.
 
-The tag-context release jobs hold no production account or App secrets. They use
-`GITHUB_TOKEN` to dispatch public workers on `main`. `dispatch-canaries.yml` uses
-a scoped GitHub App to dispatch the private worker on `master`, correlates the
-exact run, renews its one-hour installation token during longer waits, and
-propagates failure. Queuing a run alone cannot satisfy validation. Production
-failure occurs after promotion; the release remains available.
+The release's public worker uses protected environment credentials and an
+immutable `main` harness. Correlated dispatch and result checking ensure that
+queuing a run alone cannot satisfy the smoke gate. Production smoke failure
+occurs after promotion; the release remains available.
+
+The private [Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests)
+operates independently: scheduled and manual runs resolve the latest stable CLI
+release once and execute its four lifecycle cases. Production full lifecycles
+run hourly. Release ancestry, fixed asset checksums, and source/workflow
+attestations establish the binary's authenticity. The schedule continues while
+public production smoke is pending or failing. Configure private credentials,
+persistent health IDs, and per-tier settings in that repository; private results
+do not gate public CLI releases.
 
 Historical archives without the new attestations cannot pass operational
-verification. Merge both coordinated PRs and configure the following settings
-before publishing the first attested candidate.
+verification. Configure public smoke before publishing the first attested
+candidate, and configure the private repository separately before operational
+canary use.
 
 ## Repository setup
 
-Protect `main` and create environments `dev`, `production`, and `canary-dispatch`.
-Restrict their deployment branches to `main`; apply the team's environment
-protection policy. In both `dev` and `production`, configure:
+A repository administrator must protect `main` and configure the `dev` and
+`production` environments. Restrict their deployment branches to `main` and apply
+the team's environment protection policy. In both environments, configure:
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
@@ -162,12 +170,17 @@ protection policy. In both `dev` and `production`, configure:
 | Variables | `NISTRO_SMOKE_INFERENCE_ID`, `NISTRO_SMOKE_POSTGRES_ID` | Dedicated describe fixtures |
 | Variables | `NISTRO_SMOKE_MODEL`, `NISTRO_SMOKE_MAX_MODEL_LEN`, `NISTRO_SMOKE_LOCATION` | Optional discovery inputs |
 
-In `canary-dispatch`, store `CANARY_APP_ID` and `CANARY_APP_PRIVATE_KEY`. Install
-that App on only `omnistrate/nistro-e2e-tests`, granting Actions read/write,
-Contents read, and Metadata read. Public PR jobs never receive these secrets.
-Configure private `dev`/`production` environments, account credentials, persistent
-IDs, and per-tier configs using that repository's README. These settings have not
-been provisioned by the migration, and fixture success is not live validation.
+Confirm the Dev CLI API hostname with its owner before setting Dev API variables.
+Read-only checks found an HTML 404 for `/v1/postgres/scale/catalog` at
+`https://dev.nistro.ai`. Existing portal/website configuration references
+`https://dev-api.nistro.ai`, where the catalog returned JSON 401 and `/healthz`
+returned JSON 200. These checks do not establish the owner's intended target;
+hostname confirmation remains pending.
+
+Dedicated Dev/production smoke credentials and API configuration still need to
+be supplied by the repository owners. Fixture success does not establish live
+Nistro authentication or provisioning success. Private canary setup is described
+in the private repository's README and is independent of this release setup.
 
 ## Extending coverage
 

@@ -87,24 +87,29 @@ version tag:
    marks it as a prerelease while it builds and validates the artifacts.
 
 Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
-and ARM64, generates `SHA256SUMS`, validates the installer and binary contracts,
-publishes a signed multi-architecture image to GHCR, and runs container E2E
-tests. Versioned CLI archives also receive GitHub build-provenance attestations.
-Every candidate then runs CLI smoke and private lifecycle tests against Dev.
-Only intended stable releases with successful validation are promoted to stable
-and latest and update the GHCR major, minor, and `latest` aliases. Prerelease tags
-and releases explicitly marked as prereleases retain their prerelease status.
+and ARM64, generates `SHA256SUMS`, validates the native installer and installed
+binary contracts, publishes a signed multi-architecture image to GHCR, and runs
+container checks. Versioned CLI archives also receive GitHub build-provenance
+attestations. Every candidate then runs public CLI authentication, read and
+discovery smoke against Dev from the trusted `main` workflow. The release uses
+its same-repository `GITHUB_TOKEN` to start that smoke run and waits for success
+before promoting an intended stable release. Prerelease tags and releases
+explicitly marked as prereleases retain their prerelease status and do not update
+stable/latest or GHCR stable aliases.
 
-After promotion, stable releases run authenticated production CLI smoke tests
-and the four lifecycle canaries in the private
+After promotion, stable releases run authenticated production CLI smoke. A
+production smoke failure marks the workflow failed; the promoted release remains
+available. Configure the protected public smoke environments before publishing;
+missing Dev smoke configuration blocks stable promotion. See
+[the test framework guide](test/README.md) for coverage and setup.
+
+Deployment lifecycle canaries and their regression fixtures live in the private
 [Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests).
-The release workflow waits for the corresponding validation runs. A production
-failure marks the workflow failed; the promoted release remains available.
-Configure the protected environments and cross-repository GitHub App before
-publishing: missing configuration blocks Dev validation and stable promotion.
-See [the test framework guide](test/README.md) for coverage and setup.
-Run `make test-readme` to execute the documented CLI examples and configuration
-checks against a local test API using the real binary.
+That repository independently checks the latest stable CLI release on schedules
+and manual runs, with all four production lifecycle cases running hourly.
+Private canaries use their own environment configuration and do not participate
+in CLI release promotion. Run `make test-readme` to execute the documented CLI
+examples and configuration checks against a local test API using the real binary.
 
 Creating the draft does not start publication, so maintainers retain control
 over when customer-facing artifacts become available. Tags can also be created

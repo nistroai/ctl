@@ -372,8 +372,8 @@ jobs:
   dev-validation:
     name: Validate candidate against Dev
     needs: [prepare, publish, test-install-script, verify-installer, docker-e2e-test]
-    # Every candidate, including prereleases, receives exact-binary live Dev
-    # coverage before stable promotion. Dispatchers run from protected main.
+    # Every candidate, including prereleases, receives exact-binary public Dev
+    # smoke coverage before stable promotion. The smoke harness runs on main.
     uses: ./.github/workflows/release-validation.yml
     permissions:
       contents: read
@@ -430,8 +430,9 @@ jobs:
           prerelease: false
           make_latest: true
 
-  # Explicit workflow_dispatch triggers work with GITHUB_TOKEN. Production
-  # credentials and App keys stay in protected default-branch worker workflows.
+  # Same-repository smoke dispatch uses GITHUB_TOKEN. Production account
+  # credentials stay in the protected main smoke workflow. Private lifecycle
+  # canaries run independently on their own schedule and never gate a release.
   production-validation:
     name: Validate stable release against production
     needs: [prepare, promote-release]

@@ -1,4 +1,4 @@
-name: Release Validation Dispatch
+name: Release Smoke Validation
 
 on:
   workflow_call:
@@ -19,13 +19,9 @@ permissions:
 
 jobs:
   validate:
-    name: Await ${{ matrix.workflow }} (${{ inputs.environment }})
+    name: Await CLI smoke (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 130
-    strategy:
-      fail-fast: false
-      matrix:
-        workflow: [smoke-tests.yml, dispatch-canaries.yml]
+    timeout-minutes: 65
     steps:
       - name: Resolve trusted dispatcher revision
         id: harness
@@ -47,9 +43,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.cli-version }}
           SOURCE_RUN_ID: ${{ inputs.source-run-id }}
           TARGET_ENVIRONMENT: ${{ inputs.environment }}
-          VALIDATION_WORKFLOW: ${{ matrix.workflow }}
         run: |
           python3 .github/scripts/dispatch-and-wait.py \
-            --repository nistroai/ctl --workflow "$VALIDATION_WORKFLOW" \
             --environment "$TARGET_ENVIRONMENT" --version "$RELEASE_VERSION" \
-            --source-run-id "$SOURCE_RUN_ID" --timeout-minutes 125
+            --source-run-id "$SOURCE_RUN_ID" --timeout-minutes 60
