@@ -1,0 +1,104 @@
+name: CLI Smoke Tests
+run-name: CLI smoke ${{ inputs.environment }} [${{ inputs.correlation-id }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected environment with the approved API origin and dedicated account
+        type: choice
+        options: [Dev-Smoke-Test, Prod-Canary-Test]
+        default: Dev-Smoke-Test
+        required: true
+      cli-version:
+        description: Published CLI release tag to test, or latest
+        type: string
+        default: latest
+        required: true
+      source-run-id:
+        description: Originating Release run ID; required for an in-progress candidate
+        type: string
+        required: false
+      correlation-id:
+        description: Correlation supplied by the trusted release dispatcher
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+
+jobs:
+  smoke-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Require trusted workflow context
+        env:
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          [[ "$REPOSITORY" == nistroai/ctl && "$REF" == refs/heads/main ]]
+          [[ "$ENVIRONMENT" == Dev-Smoke-Test || "$ENVIRONMENT" == Prod-Canary-Test ]]
+      - name: Checkout trusted smoke harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Approve release and protected API origin
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLI_VERSION: ${{ inputs.cli-version }}
+          SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          NISTRO_SERVER: ${{ vars.NISTRO_SERVER }}
+          NISTRO_ALLOWED_API_HOSTS: ${{ vars.NISTRO_ALLOWED_API_HOSTS }}
+        run: python3 .github/scripts/approve-release.py
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install approved attested release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLI_VERSION: ${{ steps.release.outputs.version }}
+          CLI_SHA: ${{ steps.release.outputs.sha }}
+          CLI_RELEASE_ID: ${{ steps.release.outputs.release-id }}
+        run: bash .github/scripts/install-approved-cli.sh
+      - name: Run authentication, read and discovery smoke
+        env:
+          ENABLE_SMOKE_TEST: "true"
+          NISTRO_TEST_EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+          NISTRO_SERVER: ${{ steps.release.outputs.server }}
+          NISTRO_TEST_ALLOWED_API_HOSTS: ${{ vars.NISTRO_ALLOWED_API_HOSTS }}
+          NISTRO_HTTP_TIMEOUT: ${{ vars.NISTRO_HTTP_TIMEOUT || '2m' }}
+          NISTRO_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          NISTRO_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          NISTRO_TOKEN: ${{ secrets.SMOKE_TEST_TOKEN }}
+          NISTRO_SMOKE_INFERENCE_ID: ${{ vars.NISTRO_SMOKE_INFERENCE_ID }}
+          NISTRO_SMOKE_POSTGRES_ID: ${{ vars.NISTRO_SMOKE_POSTGRES_ID }}
+          NISTRO_SMOKE_MODEL: ${{ vars.NISTRO_SMOKE_MODEL }}
+          NISTRO_SMOKE_MAX_MODEL_LEN: ${{ vars.NISTRO_SMOKE_MAX_MODEL_LEN }}
+          NISTRO_SMOKE_LOCATION: ${{ vars.NISTRO_SMOKE_LOCATION }}
+        run: |
+          set -o pipefail
+          go test -list '^TestProductionSmoke$' ./test/smoke_test/... | awk '$0 == "TestProductionSmoke" { found = 1 } END { exit !found }'
+          go test -json -count=1 -timeout 20m ./test/smoke_test/... -run '^TestProductionSmoke$' | tee smoke-results.json
+          python3 .github/scripts/check-smoke-results.py smoke-results.json
+      - name: Upload smoke results and provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-smoke-${{ inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            smoke-results.json
+            approved-release.json
+            ${{ env.CLI_PROVENANCE_FILE }}
+          if-no-files-found: warn
+          retention-days: 14

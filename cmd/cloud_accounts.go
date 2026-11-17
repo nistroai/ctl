@@ -38,9 +38,10 @@ var cloudAccountsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List connected cloud accounts",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		requestClient := client()
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 		defer cancel()
-		accounts, err := client().CloudAccounts(ctx, cloudAccountsListCfg.cloud)
+		accounts, err := requestClient.CloudAccounts(ctx, cloudAccountsListCfg.cloud)
 		if err != nil {
 			return err
 		}
@@ -53,9 +54,10 @@ var cloudAccountsConnectCmd = &cobra.Command{
 	Use:   "connect",
 	Short: "Connect a cloud account",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		requestClient := client()
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 		defer cancel()
-		resp, err := client().CreateCloudAccount(ctx, api.CloudAccountRequest{
+		resp, err := requestClient.CreateCloudAccount(ctx, api.CloudAccountRequest{
 			CloudProvider:       strings.ToLower(strings.TrimSpace(cloudAccountsConnectCfg.cloud)),
 			CloudProviderID:     cloudAccountsConnectCfg.cloudProviderID,
 			Name:                cloudAccountsConnectCfg.name,
