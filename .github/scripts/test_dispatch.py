@@ -26,21 +26,24 @@ class CorrelationTests(unittest.TestCase):
 
 
 class SmokeDispatchTests(unittest.TestCase):
-    args = ["dispatch-and-wait.py", "--environment", "dev", "--version", "v1.0.0-rc.1", "--source-run-id", "123"]
+    args = ["dispatch-and-wait.py", "--environment", "Dev-Smoke-Test", "--version", "v1.0.0-rc.1", "--source-run-id", "123"]
 
     def test_fixed_public_target_awaits_correlated_success(self):
         completed = {"id": 7, "html_url": "https://github.com/nistroai/ctl/actions/runs/7",
                      "status": "completed", "conclusion": "success"}
-        with patch.object(sys, "argv", self.args), \
-                patch.object(dispatch, "api", side_effect=[None, {"workflow_runs": []}]) as api, \
-                patch.object(dispatch, "selected_run", return_value=completed), \
-                contextlib.redirect_stdout(io.StringIO()):
-            dispatch.main()
-        path, payload = api.call_args_list[0].args
-        self.assertEqual(path, "repos/nistroai/ctl/actions/workflows/smoke-tests.yml/dispatches")
-        self.assertEqual(payload["ref"], "main")
-        self.assertEqual(payload["inputs"]["cli-version"], "v1.0.0-rc.1")
-        self.assertNotIn("suite", payload["inputs"])
+        for environment in ("Dev-Smoke-Test", "Prod-Canary-Test"):
+            args = ["dispatch-and-wait.py", "--environment", environment, "--version", "v1.0.0", "--source-run-id", "123"]
+            with self.subTest(environment=environment), patch.object(sys, "argv", args), \
+                    patch.object(dispatch, "api", side_effect=[None, {"workflow_runs": []}]) as api, \
+                    patch.object(dispatch, "selected_run", return_value=completed), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                dispatch.main()
+            path, payload = api.call_args_list[0].args
+            self.assertEqual(path, "repos/nistroai/ctl/actions/workflows/smoke-tests.yml/dispatches")
+            self.assertEqual(payload["ref"], "main")
+            self.assertEqual(payload["inputs"]["environment"], environment)
+            self.assertEqual(payload["inputs"]["cli-version"], "v1.0.0")
+            self.assertNotIn("suite", payload["inputs"])
 
     def test_terminal_failure_is_propagated_without_retry(self):
         completed = {"id": 7, "html_url": "https://github.com/nistroai/ctl/actions/runs/7",

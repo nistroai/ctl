@@ -99,8 +99,9 @@ stable/latest or GHCR stable aliases.
 
 After promotion, stable releases run authenticated production CLI smoke. A
 production smoke failure marks the workflow failed; the promoted release remains
-available. Configure the protected public smoke environments before publishing;
-missing Dev smoke configuration blocks stable promotion. See
+available. Configure the protected public smoke environments `Dev-Smoke-Test`
+and `Prod-Canary-Test` before publishing; missing Dev smoke configuration blocks
+stable promotion. See
 [the test framework guide](test/README.md) for coverage and setup.
 
 Deployment lifecycle canaries and their regression fixtures live in the private

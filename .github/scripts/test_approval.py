@@ -30,7 +30,7 @@ class TargetPolicyTests(unittest.TestCase):
         sha = "a" * 40
         resolved = {"version": "v1.0.0", "sha": sha, "release-id": "1", "source-run-id": "1"}
         env = {"GITHUB_REPOSITORY": "nistroai/ctl", "GITHUB_REF": "refs/heads/main",
-               "GITHUB_EVENT_NAME": "workflow_dispatch", "TARGET_ENVIRONMENT": "production",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "TARGET_ENVIRONMENT": "Prod-Canary-Test",
                "GITHUB_WORKFLOW_SHA": sha, "NISTRO_ALLOWED_API_HOSTS": "api.nistro.ai",
                "GITHUB_OUTPUT": "fixture-output", "APPROVAL_MODE": "dispatch"}
         for server in ("https://api.nistro.ai", "https://evil.test"):
@@ -73,7 +73,7 @@ class ReleaseRunTests(unittest.TestCase):
     def test_production_rejects_semver_prerelease_even_when_api_marks_stable(self):
         for tag in ("v1.0.0-rc.1", "v1.0.0-rc.1+build.2"):
             release = {"tag_name": tag, "draft": False, "prerelease": False, "published_at": "2026-11-16T00:00:00Z"}
-            with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), patch.object(approval, "api", return_value=release), self.assertRaises(ValueError):
+            with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "Prod-Canary-Test"}), patch.object(approval, "api", return_value=release), self.assertRaises(ValueError):
                 approval.resolve(tag, "1")
 
     def test_hyphens_in_build_metadata_are_not_semver_prereleases(self):
@@ -82,12 +82,12 @@ class ReleaseRunTests(unittest.TestCase):
         run = {**self.run, "head_branch": tag}
         responses = [release, {"object": {"type": "commit", "sha": self.sha}},
                      {"status": "identical", "merge_base_commit": {"sha": self.sha}}, run]
-        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), patch.object(approval, "api", side_effect=responses), patch.object(approval, "approve_run"):
+        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "Prod-Canary-Test"}), patch.object(approval, "api", side_effect=responses), patch.object(approval, "approve_run"):
             self.assertEqual(approval.resolve(tag, "1")["version"], tag)
 
     def test_production_requires_completed_stable_promotion(self):
         base_jobs = [{"name": name, "status": "completed", "conclusion": "success"} for name in approval.required_jobs()]
-        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}):
+        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "Prod-Canary-Test"}):
             for jobs in (base_jobs, base_jobs + [{"name": "Promote release to latest", "status": "completed", "conclusion": "skipped"}]):
                 with patch.object(approval, "api", return_value={"jobs": jobs}), self.assertRaises(ValueError):
                     approval.approve_run(self.run, self.sha, "v1.0.0", True)

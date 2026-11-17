@@ -32,7 +32,7 @@ def validate_target(server, allowed):
 
 
 def required_jobs():
-    return (({"Promote release to latest"} if os.environ.get("TARGET_ENVIRONMENT") == "production" else set())
+    return (({"Promote release to latest"} if os.environ.get("TARGET_ENVIRONMENT") == "Prod-Canary-Test" else set())
             | {"test", "prepare", "publish", "Merge multi-arch manifest and sign"}
             | {f"build ({system}, {arch})" for system in ("linux", "darwin", "windows") for arch in ("amd64", "arm64")}
             | {f"verify-installer ({system})" for system in ("ubuntu-latest", "macos-latest", "windows-latest", "ubuntu-24.04-arm")}
@@ -76,7 +76,7 @@ def resolve(requested, source_run):
     semantic_prerelease = "-" in tag.split("+", 1)[0]
     if release.get("draft") or not release.get("published_at") or (latest and (release.get("prerelease") or semantic_prerelease)):
         fail("CLI release must be published; latest must be stable")
-    if os.environ.get("TARGET_ENVIRONMENT") == "production" and (release.get("prerelease") or semantic_prerelease):
+    if os.environ.get("TARGET_ENVIRONMENT") == "Prod-Canary-Test" and (release.get("prerelease") or semantic_prerelease):
         fail("Production smoke requires a promoted stable CLI release")
     ref = api(f"repos/{REPOSITORY}/git/ref/tags/{quote(tag, safe='')}")["object"]
     for _ in range(8):
@@ -112,7 +112,7 @@ def main():
     if (os.environ.get("GITHUB_REPOSITORY") != REPOSITORY
             or os.environ.get("GITHUB_REF") != "refs/heads/main"
             or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
-            or environment not in ("dev", "production")):
+            or environment not in ("Dev-Smoke-Test", "Prod-Canary-Test")):
         fail("Live validation requires the protected CLI main workflow and approved environment")
     workflow_sha = os.environ.get("GITHUB_WORKFLOW_SHA", "")
     checked_out = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
