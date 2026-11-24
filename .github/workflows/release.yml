@@ -383,9 +383,35 @@ jobs:
       cli-version: ${{ needs.prepare.outputs.version }}
       source-run-id: ${{ github.run_id }}
 
+  production-candidate-ready:
+    name: Production candidate ready
+    needs: [prepare, dev-validation]
+    if: needs.prepare.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Record successful candidate validation
+        run: echo "Stable candidate passed build, package, installer, container, and Dev smoke validation"
+
+  # Validate the exact versioned candidate against production while the GitHub
+  # release is still a prerelease and stable GHCR aliases still point to the
+  # previous release. A failure therefore blocks rather than rolls back.
+  production-validation:
+    name: Validate stable candidate against production
+    needs: [prepare, production-candidate-ready]
+    if: needs.prepare.outputs.stable == 'true'
+    uses: ./.github/workflows/release-validation.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      environment: production
+      cli-version: ${{ needs.prepare.outputs.version }}
+      source-run-id: ${{ github.run_id }}
+
   promote-release:
     name: Promote release to latest
-    if: needs.prepare.outputs.stable == 'true'
+    if: needs.prepare.outputs.stable == 'true' && needs.production-validation.result == 'success'
     needs:
       - prepare
       - test-install-script
@@ -393,6 +419,7 @@ jobs:
       - release-package-multi-arch-merge
       - docker-e2e-test
       - dev-validation
+      - production-validation
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -429,19 +456,3 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-
-  # Same-repository smoke dispatch uses GITHUB_TOKEN. Production account
-  # credentials stay in the protected main smoke workflow. Private lifecycle
-  # canaries run independently on their own schedule and never gate a release.
-  production-validation:
-    name: Validate stable release against production
-    needs: [prepare, promote-release]
-    if: needs.prepare.outputs.stable == 'true'
-    uses: ./.github/workflows/release-validation.yml
-    permissions:
-      contents: read
-      actions: write
-    with:
-      environment: production
-      cli-version: ${{ needs.prepare.outputs.version }}
-      source-run-id: ${{ github.run_id }}

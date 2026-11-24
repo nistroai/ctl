@@ -32,7 +32,7 @@ def validate_target(server, allowed):
 
 
 def required_jobs():
-    return (({"Promote release to latest"} if os.environ.get("TARGET_ENVIRONMENT") == "production" else set())
+    return (({"Production candidate ready"} if os.environ.get("TARGET_ENVIRONMENT") == "production" else set())
             | {"test", "prepare", "publish", "Merge multi-arch manifest and sign"}
             | {f"build ({system}, {arch})" for system in ("linux", "darwin", "windows") for arch in ("amd64", "arm64")}
             | {f"verify-installer ({system})" for system in ("ubuntu-latest", "macos-latest", "windows-latest", "ubuntu-24.04-arm")}
@@ -62,7 +62,7 @@ def approve_run(run, sha, tag, explicit):
     if not required_jobs().issubset(observed) or any(
             observed[name].get("status") != "completed" or observed[name].get("conclusion") != "success"
             for name in required_jobs()):
-        fail("Release has not passed every source/build/publish/installer/Docker prerequisite")
+        fail("Release has not passed every required build, validation, and candidate-readiness job")
 
 
 def resolve(requested, source_run):
@@ -76,8 +76,12 @@ def resolve(requested, source_run):
     semantic_prerelease = "-" in tag.split("+", 1)[0]
     if release.get("draft") or not release.get("published_at") or (latest and (release.get("prerelease") or semantic_prerelease)):
         fail("CLI release must be published; latest must be stable")
-    if os.environ.get("TARGET_ENVIRONMENT") == "production" and (release.get("prerelease") or semantic_prerelease):
-        fail("Production smoke requires a promoted stable CLI release")
+    production = os.environ.get("TARGET_ENVIRONMENT") == "production"
+    if production and semantic_prerelease:
+        fail("Production smoke requires a stable semantic-version candidate")
+    candidate = production and release.get("prerelease")
+    if candidate and not source_run:
+        fail("Pre-promotion production smoke requires its explicit in-progress Release run")
     ref = api(f"repos/{REPOSITORY}/git/ref/tags/{quote(tag, safe='')}")["object"]
     for _ in range(8):
         if ref["type"] == "commit":
@@ -103,6 +107,8 @@ def resolve(requested, source_run):
         if not matching:
             fail("No successful CLI Release run exists for this exact tag and commit")
         run = matching[0]
+    if candidate and run.get("status") != "in_progress":
+        fail("Pre-promotion production smoke requires its exact Release run to be in progress")
     approve_run(run, sha, tag, bool(source_run))
     return {"version": tag, "sha": sha, "source-run-id": str(run["id"]), "release-id": str(release["id"])}
 

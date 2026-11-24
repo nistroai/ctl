@@ -2,7 +2,6 @@ import importlib.util
 import os
 import pathlib
 import subprocess
-import tempfile
 import unittest
 from unittest.mock import mock_open, patch
 
@@ -85,14 +84,36 @@ class ReleaseRunTests(unittest.TestCase):
         with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), patch.object(approval, "api", side_effect=responses), patch.object(approval, "approve_run"):
             self.assertEqual(approval.resolve(tag, "1")["version"], tag)
 
-    def test_production_requires_completed_stable_promotion(self):
-        base_jobs = [{"name": name, "status": "completed", "conclusion": "success"} for name in approval.required_jobs()]
+    def test_production_requires_successful_candidate_readiness(self):
         with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}):
-            for jobs in (base_jobs, base_jobs + [{"name": "Promote release to latest", "status": "completed", "conclusion": "skipped"}]):
-                with patch.object(approval, "api", return_value={"jobs": jobs}), self.assertRaises(ValueError):
+            jobs = [{"name": name, "status": "completed", "conclusion": "success"} for name in approval.required_jobs()]
+            self.assertIn("Production candidate ready", approval.required_jobs())
+            self.assertNotIn("Promote release to latest", approval.required_jobs())
+            for broken in ([job for job in jobs if job["name"] != "Production candidate ready"],
+                           [{**job, "conclusion": "skipped"} if job["name"] == "Production candidate ready" else job for job in jobs]):
+                with patch.object(approval, "api", return_value={"jobs": broken}), self.assertRaises(ValueError):
                     approval.approve_run(self.run, self.sha, "v1.0.0", True)
-            with patch.object(approval, "api", return_value={"jobs": base_jobs + [{"name": "Promote release to latest", "status": "completed", "conclusion": "success"}]}):
+            with patch.object(approval, "api", return_value={"jobs": jobs}):
                 approval.approve_run(self.run, self.sha, "v1.0.0", True)
+
+    def test_pre_promotion_production_accepts_only_explicit_in_progress_candidate(self):
+        release = {"id": 1, "tag_name": "v1.0.0", "draft": False, "prerelease": True,
+                   "published_at": "2026-11-16T00:00:00Z"}
+        ref = {"object": {"type": "commit", "sha": self.sha}}
+        comparison = {"status": "identical", "merge_base_commit": {"sha": self.sha}}
+        in_progress = {**self.run, "status": "in_progress", "conclusion": None}
+        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), \
+                patch.object(approval, "api", side_effect=[release, ref, comparison, in_progress]), \
+                patch.object(approval, "approve_run") as approve_run:
+            self.assertEqual(approval.resolve("v1.0.0", "1")["version"], "v1.0.0")
+            approve_run.assert_called_once_with(in_progress, self.sha, "v1.0.0", True)
+        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), \
+                patch.object(approval, "api", return_value=release), self.assertRaises(ValueError):
+            approval.resolve("v1.0.0", "")
+        with patch.dict(os.environ, {"TARGET_ENVIRONMENT": "production"}), \
+                patch.object(approval, "api", side_effect=[release, ref, comparison, self.run]), \
+                patch.object(approval, "approve_run"), self.assertRaises(ValueError):
+            approval.resolve("v1.0.0", "1")
 
     def test_candidate_requires_every_platform_prerequisite_not_skipped(self):
         self.run.update(status="in_progress", conclusion=None)
@@ -104,6 +125,31 @@ class ReleaseRunTests(unittest.TestCase):
         for broken in (jobs[:-1], [{**job, "conclusion": "skipped"} if job["name"] == "publish" else job for job in jobs]):
             with patch.object(approval, "api", return_value={"jobs": broken}), self.assertRaises(ValueError):
                 approval.approve_run(self.run, self.sha, "v1.0.0", True)
+
+
+class ReleaseWorkflowOrderingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (pathlib.Path(__file__).parents[1] / "workflows" / "release.yml").read_text()
+
+    def job_block(self, name):
+        lines = self.workflow.splitlines()
+        start = lines.index(f"  {name}:")
+        end = next((index for index in range(start + 1, len(lines))
+                    if lines[index].startswith("  ") and not lines[index].startswith("    ")
+                    and lines[index].endswith(":")), len(lines))
+        return "\n".join(lines[start:end])
+
+    def test_production_validation_blocks_stable_promotion(self):
+        ready = self.job_block("production-candidate-ready")
+        production = self.job_block("production-validation")
+        promotion = self.job_block("promote-release")
+        self.assertIn("needs: [prepare, dev-validation]", ready)
+        self.assertIn("needs: [prepare, production-candidate-ready]", production)
+        self.assertIn("environment: production", production)
+        self.assertIn("- production-validation", promotion)
+        self.assertIn("needs.production-validation.result == 'success'", promotion)
+        self.assertNotIn("always()", promotion)
 
 
 if __name__ == "__main__":

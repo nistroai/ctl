@@ -131,14 +131,17 @@ Release ordering is:
 2. Pass source, installer, installed-binary and container checks for every tag.
 3. Use the release's same-repository `GITHUB_TOKEN` to dispatch public CLI smoke
    on trusted `main` against Dev, and wait for its corresponding run to succeed.
-4. Promote only intended stable releases. A prerelease suffix or original
-   prerelease flag prevents stable/latest GitHub and image alias updates.
-5. Run public production smoke after stable promotion and wait for its result.
+4. For intended stable candidates, dispatch public production smoke while the
+   GitHub release remains a prerelease and stable image aliases remain unchanged.
+5. Promote to GitHub stable/latest and stable image aliases only after production
+   smoke succeeds. A prerelease suffix or original prerelease flag skips the
+   production gate and prevents promotion.
 
 The release's public worker uses protected environment credentials and an
 immutable `main` harness. Correlated dispatch and result checking ensure that
-queuing a run alone cannot satisfy the smoke gate. Production smoke failure
-occurs after promotion; the release remains available.
+queuing a run alone cannot satisfy either smoke gate. A production smoke failure
+leaves the exact versioned candidate available as a prerelease while the previous
+stable GitHub release and image aliases remain unchanged.
 
 The private [Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests)
 operates independently: scheduled and manual runs resolve the latest stable CLI

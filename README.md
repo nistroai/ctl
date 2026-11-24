@@ -93,14 +93,15 @@ container checks. Versioned CLI archives also receive GitHub build-provenance
 attestations. Every candidate then runs public CLI authentication, read and
 discovery smoke against Dev from the trusted `main` workflow. The release uses
 its same-repository `GITHUB_TOKEN` to start that smoke run and waits for success
-before promoting an intended stable release. Prerelease tags and releases
-explicitly marked as prereleases retain their prerelease status and do not update
-stable/latest or GHCR stable aliases.
-
-After promotion, stable releases run authenticated production CLI smoke. A
-production smoke failure marks the workflow failed; the promoted release remains
-available. Configure the protected public smoke environments before publishing;
-missing Dev smoke configuration blocks stable promotion. See
+before continuing. Intended stable candidates then run authenticated production
+CLI smoke while the GitHub release remains a prerelease and existing GHCR stable
+aliases remain unchanged. Promotion to GitHub stable/latest and GHCR stable
+aliases occurs only after both smoke environments pass. A production failure
+leaves the versioned candidate available as a prerelease and preserves the prior
+stable release and aliases. Prerelease tags and releases explicitly marked as
+prereleases never enter production validation or promotion. Configure the
+protected public smoke environments before publishing; missing Dev or production
+smoke configuration blocks stable promotion. See
 [the test framework guide](test/README.md) for coverage and setup.
 
 Deployment lifecycle canaries and their regression fixtures live in the private
