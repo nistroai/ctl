@@ -42,13 +42,14 @@ func addPlacements(parent *cobra.Command, deps Deps) {
 		if format != "table" && format != "json" {
 			return fmt.Errorf("output must be table or json")
 		}
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		requestClient := deps.Client()
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 		defer cancel()
 		var progress *progressLine
 		if format != "json" {
 			progress = startProgress(cmd.ErrOrStderr(), "Loading placements")
 		}
-		raw, err := deps.Client().Resource(ctx, "GET", "/v1/postgres/scale/catalog", nil)
+		raw, err := requestClient.Resource(ctx, "GET", "/v1/postgres/scale/catalog", nil)
 		if progress != nil {
 			progress.finish("Loaded placements", err == nil)
 		}
@@ -181,7 +182,8 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 					}
 					body["dedicated"] = tier == "scale"
 				}
-				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+				requestClient := deps.Client()
+				ctx, cancel := context.WithTimeout(cmd.Context(), max(2*time.Minute, requestClient.RequestTimeout()))
 				defer cancel()
 				var progress *progressLine
 				progressName := "offers"
@@ -191,7 +193,7 @@ func AddDiscovery(parent *cobra.Command, deps Deps) {
 				if format != "json" {
 					progress = startProgress(cmd.ErrOrStderr(), "Loading "+progressName)
 				}
-				raw, err := deps.Client().Resource(ctx, method, path, body)
+				raw, err := requestClient.Resource(ctx, method, path, body)
 				if progress != nil {
 					progress.finish("Loaded "+progressName, err == nil)
 				}

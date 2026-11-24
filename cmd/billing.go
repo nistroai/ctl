@@ -20,9 +20,10 @@ var billingStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show billing status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		requestClient := client()
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 		defer cancel()
-		status, err := client().BillingStatus(ctx)
+		status, err := requestClient.BillingStatus(ctx)
 		if err != nil {
 			return err
 		}
@@ -35,9 +36,10 @@ var billingDetailsCmd = &cobra.Command{
 	Use:   "details",
 	Short: "Show payment method and billing portal details",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		requestClient := client()
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 		defer cancel()
-		details, err := client().BillingDetails(ctx, billingDetailsCfg.returnURL)
+		details, err := requestClient.BillingDetails(ctx, billingDetailsCfg.returnURL)
 		if err != nil {
 			return err
 		}

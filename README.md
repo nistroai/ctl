@@ -87,11 +87,30 @@ version tag:
    marks it as a prerelease while it builds and validates the artifacts.
 
 Publishing builds and uploads archives for Linux, macOS, and Windows on AMD64
-and ARM64, generates `SHA256SUMS`, validates the installer, publishes a signed
-multi-architecture image to GHCR, and runs container E2E tests. Only after every
-job succeeds does the workflow promote the GitHub release to stable and latest,
-and move the GHCR major, minor, and `latest` image aliases. If validation fails,
-the release remains a prerelease and the stable aliases are unchanged.
+and ARM64, generates `SHA256SUMS`, validates the native installer and installed
+binary contracts, publishes a signed multi-architecture image to GHCR, and runs
+container checks. Versioned CLI archives also receive GitHub build-provenance
+attestations. Every candidate then runs public CLI authentication, read and
+discovery smoke against Dev from the trusted `main` workflow. The release uses
+its same-repository `GITHUB_TOKEN` to start that smoke run and waits for success
+before continuing. Intended stable candidates then run authenticated production
+CLI smoke while the GitHub release remains a prerelease and existing GHCR stable
+aliases remain unchanged. Promotion to GitHub stable/latest and GHCR stable
+aliases occurs only after both smoke environments pass. A production failure
+leaves the versioned candidate available as a prerelease and preserves the prior
+stable release and aliases. Prerelease tags and releases explicitly marked as
+prereleases never enter production validation or promotion. Configure the
+protected public smoke environments before publishing; missing Dev or production
+smoke configuration blocks stable promotion. See
+[the test framework guide](test/README.md) for coverage and setup.
+
+Deployment lifecycle canaries and their regression fixtures live in the private
+[Nistro E2E repository](https://github.com/omnistrate/nistro-e2e-tests).
+That repository independently checks the latest stable CLI release on schedules
+and manual runs, with all four production lifecycle cases running hourly.
+Private canaries use their own environment configuration and do not participate
+in CLI release promotion. Run `make test-readme` to execute the documented CLI
+examples and configuration checks against a local test API using the real binary.
 
 Creating the draft does not start publication, so maintainers retain control
 over when customer-facing artifacts become available. Tags can also be created
@@ -194,5 +213,6 @@ Useful commands:
 Configuration:
 
 - The default REST API server is production: `https://api.nistro.ai`. Override it with `--server` or `NISTRO_SERVER` (for example, `http://127.0.0.1:8080` for local development).
+- For the confirmed Dev API, set `NISTRO_SERVER=https://dev-api.nistro.ai`.
 - Commands use the session saved by `nistro login`. `NISTRO_TOKEN` can override it for automation. Logout clears the saved session; unset `NISTRO_TOKEN` to stop using that override.
 - `NISTRO_EMAIL` and `NISTRO_PASSWORD` can supply login credentials instead of flags.

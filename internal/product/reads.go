@@ -37,7 +37,8 @@ func AddReads(parent *cobra.Command, deps Deps, path string) {
 			if name == "delete" {
 				method = "DELETE"
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			requestClient := deps.Client()
+			ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, requestClient.RequestTimeout()))
 			defer cancel()
 			messages := map[string][2]string{
 				"list":     {"Loading deployments", "Loaded deployments"},
@@ -48,7 +49,7 @@ func AddReads(parent *cobra.Command, deps Deps, path string) {
 			if format != "json" {
 				progress = startProgress(cmd.ErrOrStderr(), messages[name][0])
 			}
-			raw, err := deps.Client().Resource(ctx, method, resourcePath, nil)
+			raw, err := requestClient.Resource(ctx, method, resourcePath, nil)
 			if progress != nil {
 				progress.finish(messages[name][1], err == nil)
 			}

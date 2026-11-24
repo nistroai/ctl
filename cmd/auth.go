@@ -51,9 +51,9 @@ var loginCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(cmd.Context(), max(30*time.Second, rootCfg.httpTimeout))
 		defer cancel()
-		resp, err := api.NewClient(strings.TrimRight(rootCfg.server, "/"), "").SignIn(ctx, api.SignInRequest{
+		resp, err := api.NewClient(strings.TrimRight(rootCfg.server, "/"), "", api.WithTimeout(rootCfg.httpTimeout)).SignIn(ctx, api.SignInRequest{
 			Email:    email,
 			Password: password,
 		})

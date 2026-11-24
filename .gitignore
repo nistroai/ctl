@@ -1,2 +1,4 @@
 /dist/
 /manual-testing/
+__pycache__/
+*.pyc
