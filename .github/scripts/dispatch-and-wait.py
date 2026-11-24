@@ -47,7 +47,7 @@ def selected_run(runs, branch, correlation):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--environment", choices=("Dev-Smoke-Test", "Prod-Canary-Test"), required=True)
+    parser.add_argument("--environment", choices=("dev", "production"), required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--timeout-minutes", type=int, default=60)

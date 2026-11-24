@@ -379,7 +379,7 @@ jobs:
       contents: read
       actions: write
     with:
-      environment: Dev-Smoke-Test
+      environment: dev
       cli-version: ${{ needs.prepare.outputs.version }}
       source-run-id: ${{ github.run_id }}
 
@@ -442,6 +442,6 @@ jobs:
       contents: read
       actions: write
     with:
-      environment: Prod-Canary-Test
+      environment: production
       cli-version: ${{ needs.prepare.outputs.version }}
       source-run-id: ${{ github.run_id }}

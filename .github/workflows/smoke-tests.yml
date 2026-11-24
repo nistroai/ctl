@@ -7,8 +7,8 @@ on:
       environment:
         description: Protected environment with the approved API origin and dedicated account
         type: choice
-        options: [Dev-Smoke-Test, Prod-Canary-Test]
-        default: Dev-Smoke-Test
+        options: [dev, production]
+        default: dev
         required: true
       cli-version:
         description: Published CLI release tag to test, or latest
@@ -42,7 +42,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           [[ "$REPOSITORY" == nistroai/ctl && "$REF" == refs/heads/main ]]
-          [[ "$ENVIRONMENT" == Dev-Smoke-Test || "$ENVIRONMENT" == Prod-Canary-Test ]]
+          [[ "$ENVIRONMENT" == dev || "$ENVIRONMENT" == production ]]
       - name: Checkout trusted smoke harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -130,12 +130,10 @@ Release ordering is:
 1. Build and publish versioned candidate assets with checksums and provenance.
 2. Pass source, installer, installed-binary and container checks for every tag.
 3. Use the release's same-repository `GITHUB_TOKEN` to dispatch public CLI smoke
-   on trusted `main` using `Dev-Smoke-Test`, and wait for its corresponding run
-   to succeed.
+   on trusted `main` against Dev, and wait for its corresponding run to succeed.
 4. Promote only intended stable releases. A prerelease suffix or original
    prerelease flag prevents stable/latest GitHub and image alias updates.
-5. Run public production smoke using `Prod-Canary-Test` after stable promotion
-   and wait for its result.
+5. Run public production smoke after stable promotion and wait for its result.
 
 The release's public worker uses protected environment credentials and an
 immutable `main` harness. Correlated dispatch and result checking ensure that
@@ -158,16 +156,9 @@ canary use.
 
 ## Repository setup
 
-A repository administrator must protect `main` and configure the `Dev-Smoke-Test`
-and `Prod-Canary-Test` environments. Restrict their deployment branches to `main`
-and apply the team's environment protection policy.
-
-| Environment | API target | Release stage |
-| --- | --- | --- |
-| `Dev-Smoke-Test` | `https://dev-api.nistro.ai` | Every candidate before stable promotion |
-| `Prod-Canary-Test` | `https://api.nistro.ai` | Stable releases after promotion |
-
-In both environments, configure:
+A repository administrator must protect `main` and configure the `dev` and
+`production` environments. Restrict their deployment branches to `main` and apply
+the team's environment protection policy. In both environments, configure:
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
@@ -180,7 +171,7 @@ In both environments, configure:
 | Variables | `NISTRO_SMOKE_MODEL`, `NISTRO_SMOKE_MAX_MODEL_LEN`, `NISTRO_SMOKE_LOCATION` | Optional discovery inputs |
 
 The confirmed Dev CLI API is `https://dev-api.nistro.ai`. Set these variables
-in the protected public `Dev-Smoke-Test` environment:
+in the protected public `dev` environment:
 
 | Name | Value |
 | --- | --- |
@@ -195,8 +186,8 @@ placements, recommendations and offers. Password login and inference describe
 were explicitly skipped; provisioning and model generation were not exercised.
 Automated smoke still requires dedicated credentials in GitHub.
 
-A public repository administrator must finish protecting `Dev-Smoke-Test` and
-`Prod-Canary-Test` and configure dedicated smoke credentials. Private canary
+A public repository administrator still needs to configure the protected
+`dev`/`production` environments and dedicated smoke credentials. Private canary
 setup is described in the private repository's README and is independent of
 this release setup.
 
